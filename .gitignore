@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Node modules
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Config with secrets / local paths
+config.yaml
+
+# Models (large binaries)
+models/
+
+ffmpeg/
+
+# Temp / output
+temp/
+output/
+uploads/
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trae IDE
+.trae/
+
+# App runtime data
+app/history.json
+
+# Local Codex recovery and validation artifacts
+.codex-backups/
+.codex-test-runs/
+.playwright-cli/
+*.bundle
+
+# Private development and validation material
+/tests/
+/specs/

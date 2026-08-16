@@ -1,0 +1,24 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+faster-whisper>=1.1.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+PyYAML>=6.0.1
+python-dotenv>=1.0.1
+python-multipart>=0.0.20
+httpx>=0.27.0
+requests>=2.32.0
+# Local Kokoro TTS (only needed when TTS_MODE=local in config.yaml)
+kokoro-onnx>=0.5.0
+soundfile>=0.12.0
+# Misaki phonemizer for correct Chinese and Japanese pronunciation.
+# kokoro-onnx uses espeak which lacks tone markers for Chinese, causing
+# dialect-like pronunciation. Misaki produces proper tone markers matching
+# the Kokoro model's training data.
+misaki[zh]>=0.9.0
+# Misaki JAG2P imports the pyopenjtalk module. Use a prebuilt drop-in wheel on
+# Windows so users do not need Visual Studio/NMake just to install the app.
+pyopenjtalk-plus>=0.4.1.post7; sys_platform == "win32"
+pyopenjtalk>=0.4.1; sys_platform != "win32"
+# Online Korean voice provider
+edge-tts>=7.0.0

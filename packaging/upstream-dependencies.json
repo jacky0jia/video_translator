@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "delivery": "user_direct_upstream_download",
+  "components": {
+    "ffmpeg": {
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/GyanD/codexffmpeg/releases/tag/2026-01-05-git-2892815c45",
+      "installed_files": [
+        {"path": "app/ffmpeg/ffmpeg.exe", "sha256": "6cf162ea0c25e93a7ed4b6335f590bca4a037a66508c267cbe4aec458a945078"},
+        {"path": "app/ffmpeg/ffprobe.exe", "sha256": "ec13f4557c67bdced9bcb4fd9911ca8d28d1db2e72db6ecf1c55e882d10dcb77"}
+      ],
+      "files": [{"name": "ffmpeg-2026-01-05-git-2892815c45-essentials_build.zip", "url": "https://github.com/GyanD/codexffmpeg/releases/download/2026-01-05-git-2892815c45/ffmpeg-2026-01-05-git-2892815c45-essentials_build.zip", "sha256": "552dc4651632ddc3e0426fc8b83e2642f5b6f1da48ce48d1bee18ead011efcd1"}]
+    },
+    "kokoro": {
+      "license": "Base model Apache-2.0; upstream attribution applies",
+      "source": "https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0",
+      "model_card": "https://huggingface.co/hexgrad/Kokoro-82M",
+      "files": [
+        {"name": "kokoro-v1.0.onnx", "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx", "sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"},
+        {"name": "voices-v1.0.bin", "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"},
+        {"name": "espeakng_loader-0.2.4-py3-none-win_amd64.whl", "url": "https://files.pythonhosted.org/packages/9d/ed/a3d872fbad4f3a3f3db0e8c31768ab14e77cd77306de16b8b20b1e1df7ea/espeakng_loader-0.2.4-py3-none-win_amd64.whl", "sha256": "41f1e08ac9deda2efd1ea9de0b81dab9f5ae3c4b24284f76533d0a7b1dd7abd7"}
+      ],
+      "loader_source": "https://pypi.org/project/espeakng-loader/0.2.4/",
+      "loader_license": "No explicit loader-wrapper license found; bundled eSpeak NG has separate GPL terms"
+    },
+    "qwen-model": {
+      "license": "Apache-2.0 declared in both GGUF artifacts",
+      "source": "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/tree/ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+      "model_card": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "files": [
+        {"name": "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf", "url": "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/ca27d74bc954b73dadab5b71ca265d87fc861a7c/Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf", "sha256": "8d18c94acb2addd042f97da63c98be144eafa76d0d9495177eab65130cf85129"},
+        {"name": "mmproj-Qwen3-TTS-12Hz-1.7B-Base-bf16.gguf", "url": "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/ca27d74bc954b73dadab5b71ca265d87fc861a7c/mmproj-Qwen3-TTS-12Hz-1.7B-Base-bf16.gguf", "sha256": "b9503e95e44705739cf82c15ce909b040b96a31ad79d02cf4dc5e1484399265d"}
+      ]
+    },
+    "qwen-cuda": {
+      "license": "llama.cpp MIT, LLVM OpenMP notices, NVIDIA CUDA EULA",
+      "source": "https://github.com/ggml-org/llama.cpp/releases/tag/b10792",
+      "files": [
+        {"name": "llama-b10792-bin-win-cuda-12.4-x64.zip", "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10792/llama-b10792-bin-win-cuda-12.4-x64.zip", "sha256": "9b0f2b64511d36688427daeada6f001ba544b5bcb5f5405fe86a0be4b230461d"},
+        {"name": "cudart-llama-bin-win-cuda-12.4-x64.zip", "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10792/cudart-llama-bin-win-cuda-12.4-x64.zip", "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"}
+      ]
+    },
+    "qwen-vulkan": {
+      "license": "llama.cpp MIT and LLVM OpenMP notices",
+      "source": "https://github.com/ggml-org/llama.cpp/releases/tag/b10792",
+      "files": [{"name": "llama-b10792-bin-win-vulkan-x64.zip", "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10792/llama-b10792-bin-win-vulkan-x64.zip", "sha256": "c55e5ce547153d21ff2ab4f19fada11e808f7372db8c57f69ca721d5976b2613"}]
+    }
+  }
+}

@@ -125,16 +125,17 @@ async def translate_transcription(
                 result=result, target_lang=target_lang,
                 progress_callback=_progress_callback if task_id else None,
                 task_id=task_id,
-                # Subtitle text is the single source of truth for both export
-                # and dubbing. Never silently rewrite it into a lossy short script.
-                fit_to_duration=False,
+                # The integrated pipeline is the dubbing workflow. Its visible
+                # translation is also the spoken script, so fit it before TTS.
+                # Standalone subtitle translation keeps the faithful-text mode.
+                fit_to_duration=pipeline,
             )
 
         # 3. Check for translation failures
         failure_markers = {"Translation error", "[Translation failed]"}
         failed_segments = [
             index for index, seg in enumerate(translated_result.segments)
-            if seg.text.strip() in failure_markers
+            if not seg.text.strip() or seg.text.strip() in failure_markers
         ]
         if failed_segments:
             err_msg = (
@@ -159,8 +160,10 @@ async def translate_transcription(
         # 5. Update history if task_id is provided
         if task_id:
             task = history_manager.get_task(task_id) or {}
-            translations = task.get("translations") or {}
+            translations = dict(task.get("translations") or {})
             translations[target_lang] = str(output_path)
+            translation_profiles = dict(task.get("translation_profiles") or {})
+            translation_profiles[target_lang] = "dubbing" if pipeline else "subtitles"
             pipeline_translation_targets = list(task.get("pipeline_translation_targets") or [])
             if pipeline and target_lang not in pipeline_translation_targets:
                 pipeline_translation_targets.append(target_lang)
@@ -172,6 +175,7 @@ async def translate_transcription(
                     "translation_path": str(output_path),
                     "target_lang": target_lang,
                     "translations": translations,
+                    "translation_profiles": translation_profiles,
                     "pipeline_translation_targets": pipeline_translation_targets,
                 },
             )

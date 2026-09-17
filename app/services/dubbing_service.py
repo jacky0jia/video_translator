@@ -20,11 +20,34 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from app.core.config import settings
+from app.core.gpu_lifecycle import gpu_provider_lifecycle
 from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.history import history_manager
 from app.core.events import emit_event
+from app.services.hardware_service import hardware_service
 from app.core.schemas import TranscriptionResult
 from app.services.edge_tts_service import EdgeTTSService
+from app.services.tts.edge import EdgeTTSProvider
+from app.services.tts.base import TTSCancelled, TTSSynthesisRequest
+from app.services.tts.kokoro import KokoroTTSProvider
+from app.services.tts.cosyvoice import CosyVoiceTTSProvider
+from app.services.tts.cosyvoice_bundle import (
+    CosyVoiceBundle,
+    default_cosyvoice_bundle_root,
+)
+from app.services.tts.qwen import QwenTTSProvider
+from app.services.tts.qwen_bundle import (
+    QwenTTSBundle,
+    default_qwen_tts_bundle_root,
+    qwen_worker_config_for_host,
+)
+from app.services.tts.registry import (
+    DEFAULT_TTS_REGISTRY,
+    TTSProviderRegistry,
+    normalize_tts_mode,
+    resolve_tts_route,
+)
+from app.services.tts.speaches import SpeachesTTSProvider
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +60,15 @@ MAX_GAP_BORROW_SECONDS = 0.5
 MIN_INTER_SEGMENT_GAP_SECONDS = 0.08
 TRIM_FADE_SECONDS = 0.04
 NATURAL_MAX_UNIFORM_TEMPO = 1.1
-NATURAL_SENTENCE_GAP_SECONDS = 0.12
+NATURAL_MAX_ADJUSTABLE_TEMPO = 1.12
+NATURAL_SENTENCE_GAP_SECONDS = 0.32
+NATURAL_MIN_SENTENCE_GAP_SECONDS = 0.20
+NATURAL_MAX_UTTERANCE_LEAD_SECONDS = 0.6
+NATURAL_MAX_FINAL_LEAD_SECONDS = 1.0
 NATURAL_MAX_GROUP_SECONDS = 12.0
+TTS_BOUNDARY_THRESHOLD_DB = -60
+TTS_LEADING_SAFETY_SECONDS = 0.04
+TTS_TRAILING_SAFETY_SECONDS = 0.08
 # Allowed clone sample extensions
 _CLONE_EXTS = (".wav", ".mp3", ".flac", ".ogg", ".m4a")
 
@@ -48,113 +78,77 @@ class DubbingCancelled(RuntimeError):
 
 
 def _is_kokoro_mode() -> bool:
-    return settings.TTS_MODE in {"local", "kokoro"}
-
-# Voice prefix → (frontend language code, kokoro-onnx lang parameter).
-# First letter encodes language; second letter encodes gender (f/m).
-_VOICE_PREFIX_MAP = {
-    "a": ("en-us", "en-us"),   # American English
-    "b": ("en-gb", "en-gb"),   # British English
-    "z": ("zh", "cmn"),        # Mandarin Chinese
-    "j": ("ja", "ja"),         # Japanese
-    "e": ("es", "es"),         # Spanish
-    "f": ("fr-fr", "fr-fr"),   # French
-    "h": ("hi", "hi"),         # Hindi
-    "i": ("it", "it"),         # Italian
-    "p": ("pt-br", "pt-br"),   # Portuguese (Brazil)
-}
-
-
-def _voice_metadata(voice_id: str) -> Dict[str, str]:
-    """Derive language and gender from a Kokoro voice name prefix.
-
-    Voice names follow ``{lang}{gender}_{name}`` — e.g. ``zf_xiaoxiao``
-    → language ``zh``, gender ``female``.
-    """
-    if not voice_id or len(voice_id) < 2:
-        return {"id": voice_id, "language": "", "gender": ""}
-    prefix = voice_id[0].lower()
-    gender_char = voice_id[1].lower()
-    lang, _ = _VOICE_PREFIX_MAP.get(prefix, ("", ""))
-    gender = "female" if gender_char == "f" else ("male" if gender_char == "m" else "")
-    return {"id": voice_id, "language": lang, "gender": gender}
-
-
-def _voice_to_kokoro_lang(voice_id: str) -> str:
-    """Return the kokoro-onnx ``lang`` parameter for phonemization."""
-    prefix = (voice_id or "")[:1].lower()
-    _, kokoro_lang = _VOICE_PREFIX_MAP.get(prefix, ("", "en-us"))
-    return kokoro_lang or "en-us"
-
-
-# Kokoro v1.0 ships 54 voices across 8 languages (en, zh, ja, es, fr, hi, it, pt-br).
-# Used as the static voice catalogue in local mode so the UI dropdown is populated
-# without loading the ~300 MB ONNX model.  Korean is NOT supported (no kf_*/km_*).
-_KOKORO_V1_VOICES = [
-    # American English (en-us)
-    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica",
-    "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
-    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
-    "am_michael", "am_onyx", "am_puck", "am_santa",
-    # British English (en-gb)
-    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
-    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
-    # Mandarin Chinese (cmn)
-    "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
-    "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
-    # Japanese (ja)
-    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
-    # Spanish (es)
-    "ef_dora", "em_alex", "em_santa",
-    # French (fr-fr)
-    "ff_siwis",
-    # Hindi (hi)
-    "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
-    # Italian (it)
-    "if_sara", "im_nicola",
-    # Portuguese (pt-br)
-    "pf_dora", "pm_alex", "pm_santa",
-]
-
+    return normalize_tts_mode(settings.TTS_MODE) == "kokoro"
 
 class DubbingService:
-    # Local Kokoro singleton (lazy-loaded, thread-safe)
-    _kokoro_instance = None
-    _kokoro_lock = threading.Lock()
-    _local_voices_cache: Optional[List[Dict[str, str]]] = None
-    # Misaki Chinese G2p converter (lazy-loaded, thread-safe).
-    # kokoro-onnx uses espeak for phonemization, but the Kokoro model was
-    # trained with misaki phonemes. For Chinese, espeak's "cmn" mode lacks
-    # tone markers, producing dialect-like pronunciation. Misaki includes
-    # proper tone markers (→↘↓↗ for the four Mandarin tones).
-    _zh_g2p = None
-    _zh_g2p_lock = threading.Lock()
-    # Misaki Japanese G2P is required for Kokoro Japanese voices. The generic
-    # kokoro-onnx tokenizer only documents English and can produce massively
-    # inflated Japanese phoneme streams.
-    _ja_g2p = None
-    _ja_g2p_lock = threading.Lock()
-
-    @staticmethod
-    def _default_kokoro_dir() -> Path:
-        """Keep large model assets in the repository-level models directory."""
-        return settings.BASE_DIR.parent / "models" / "kokoro"
-
     def __init__(
         self,
         *,
         http_client_factory: Callable = httpx.AsyncClient,
         lifecycle: ProviderLifecycle | None = None,
         edge_provider=None,
+        tts_registry: TTSProviderRegistry | None = None,
+        gpu_lifecycle: ProviderLifecycle | None = None,
     ):
         self.ffmpeg_path = settings.ffmpeg_path
         self._http_client_factory = http_client_factory
         self._lifecycle = lifecycle or NoopProviderLifecycle()
+        self._gpu_lifecycle = gpu_lifecycle or gpu_provider_lifecycle
         self._edge_provider = edge_provider or EdgeTTSService(
             self.ffmpeg_path, sample_rate=settings.DUB_SAMPLE_RATE
         )
+        self.tts_registry = tts_registry or self._build_tts_registry()
         self._cancel_events: Dict[str, threading.Event] = {}
         self._finished_events: Dict[str, threading.Event] = {}
+
+    def _build_tts_registry(self) -> TTSProviderRegistry:
+        registry = TTSProviderRegistry(DEFAULT_TTS_REGISTRY.list())
+        registry.register_provider(KokoroTTSProvider())
+        registry.register_provider(EdgeTTSProvider(self._edge_provider))
+        cosy_bundle = None
+
+        def load_cosy_bundle():
+            nonlocal cosy_bundle
+            if cosy_bundle is None:
+                cosy_bundle = CosyVoiceBundle.load(
+                    default_cosyvoice_bundle_root(settings.BASE_DIR)
+                )
+            return cosy_bundle
+
+        registry.register_provider(
+            lambda: QwenTTSProvider(
+                lambda: qwen_worker_config_for_host(
+                    QwenTTSBundle.load(
+                        default_qwen_tts_bundle_root(settings.BASE_DIR),
+                        settings.BASE_DIR.parent / "models" / "voices" / "librivox_public_domain",
+                    ).worker_config,
+                    nvidia_available=hardware_service.nvidia_info is not None,
+                    amd_available=hardware_service.amd_info is not None,
+                    auto_cpu_fallback=settings.QWEN_AUTO_CPU_FALLBACK,
+                )
+            ),
+            provider_id="qwen",
+        )
+        registry.register_provider(
+            lambda: CosyVoiceTTSProvider(
+                lambda: dict(load_cosy_bundle().worker_config),
+                lambda: load_cosy_bundle().voices,
+            ),
+            provider_id="cosyvoice",
+        )
+        registry.register_provider(
+            lambda: SpeachesTTSProvider(
+                settings.TTS_API_URL,
+                model=settings.TTS_MODEL,
+                client_factory=self._http_client_factory,
+                api_key=settings.TTS_API_KEY,
+                verify_ssl=settings.VERIFY_SSL,
+                retries=settings.LLM_MAX_RETRIES,
+                retry_backoff=settings.LLM_RETRY_BACKOFF_BASE,
+            ),
+            provider_id="speaches",
+        )
+        return registry
 
     def request_cancel(self, task_id: str) -> bool:
         event = getattr(self, "_cancel_events", {}).get(task_id)
@@ -174,12 +168,7 @@ class DubbingService:
 
     @staticmethod
     def provider_for_language(language: str) -> str:
-        normalized = str(language or "").strip().lower()
-        if normalized in {"ko", "ko-kr", "korean", "한국어", "韩语", "韓語"}:
-            return "edge"
-        if _is_kokoro_mode():
-            return "kokoro"
-        return settings.TTS_MODE
+        return resolve_tts_route(settings.TTS_MODE, language).provider_id
 
     # ------------------------------------------------------------------
     # Shared helpers (mirror VideoBurnService)
@@ -260,359 +249,53 @@ class DubbingService:
         return None, ""
 
     # ------------------------------------------------------------------
-    # Speaches TTS communication
+    # Provider-neutral single-segment synthesis
     # ------------------------------------------------------------------
-    @property
-    def _base_url(self) -> str:
-        return settings.TTS_API_URL.rstrip("/")
-
-    @property
-    def _speech_url(self) -> str:
-        return f"{self._base_url}/v1/audio/speech"
-
-    @property
-    def _headers(self) -> Dict[str, str]:
-        h = {"Content-Type": "application/json"}
-        if settings.TTS_API_KEY:
-            h["Authorization"] = f"Bearer {settings.TTS_API_KEY}"
-        return h
-
     async def _synthesize_one(
         self, client: Optional[httpx.AsyncClient], text: str, voice: str, speed: float,
-        provider: str | None = None,
+        provider: str | None = None, *, adapter=None, should_cancel=None, language: str = "",
     ) -> bytes:
         """Synthesize a single segment. Returns WAV bytes."""
         provider = provider or ("kokoro" if _is_kokoro_mode() else settings.TTS_MODE)
-        if provider == "edge":
-            return await self._edge_provider.synthesize(text, voice, speed)
-        if provider == "kokoro":
-            return await asyncio.to_thread(
-                self._synthesize_one_local, text, voice, speed
-            )
-        # Speaches mode: all synthesis goes through the HTTP API.
-        # (Note: Speaches has a bug where Chinese voices crash because it passes
-        # lang="zh" to espeak which requires "cmn". We do NOT auto-route here —
-        # users should switch to local mode for Chinese dubbing.)
-        payload = {
-            "model": settings.TTS_MODEL,
-            "input": text,
-            "voice": voice,
-            "response_format": "wav",
-            "speed": speed,
-        }
-        last_err: Optional[Exception] = None
-        max_retries = max(settings.LLM_MAX_RETRIES, 1)
-        for attempt in range(max_retries + 1):
-            try:
-                resp = await client.post(
-                    self._speech_url, headers=self._headers, json=payload, timeout=120.0
-                )
-                if resp.status_code == 404 or resp.status_code == 400:
-                    # Voice not registered / bad request — no point retrying
-                    raise RuntimeError(
-                        f"TTS rejected request ({resp.status_code}): {resp.text[:300]}. "
-                        f"Check that voice '{voice}' is registered in Speaches."
-                    )
-                resp.raise_for_status()
-                return resp.content
-            except RuntimeError:
-                raise
-            except Exception as e:
-                last_err = e
-                if attempt < max_retries:
-                    wait = settings.LLM_RETRY_BACKOFF_BASE * (attempt + 1)
-                    logger.warning(f"TTS attempt {attempt + 1} failed: {e}; retrying in {wait}s")
-                    await asyncio.sleep(wait)
-        raise RuntimeError(f"TTS synthesis failed after retries: {last_err}")
+        adapter = adapter or self.tts_registry.create(provider)
+        if provider == "speaches" and client is not None:
+            adapter.bind_client(client)
+        result = await adapter.synthesize(
+            TTSSynthesisRequest(
+                text=text,
+                voice=voice,
+                speed=speed,
+                sample_rate=settings.DUB_SAMPLE_RATE,
+                language=language,
+            ),
+            should_cancel=should_cancel,
+        )
+        return result.audio
 
-    async def _fetch_voice_fallbacks(self, primary_voice: str) -> List[str]:
+    async def _fetch_voice_fallbacks(self, primary_voice: str, adapter) -> List[str]:
         """Fetch voices sharing the same language as ``primary_voice`` (excluding it).
 
         Used to gracefully fall back when a specific voice crashes the TTS
         server mid-synthesis (e.g. some Kokoro voices trigger Speaches bugs).
         Returns an empty list on any failure (fallback simply disabled).
         """
-        if _is_kokoro_mode():
-            meta = _voice_metadata(primary_voice)
-            lang = meta.get("language", "")
-            if not lang:
-                return []
-            return [
-                v["id"]
-                for v in self._get_local_voices()
-                if v.get("language") == lang and v["id"] != primary_voice
-            ]
         try:
-            async with self._http_client_factory(
-                timeout=10.0, verify=settings.VERIFY_SSL
-            ) as client:
-                resp = await client.get(
-                    f"{self._base_url}/v1/audio/voices", headers=self._headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            voices = (
-                data.get("voices", []) if isinstance(data, dict) else data
+            voices = await adapter.list_voices()
+            primary = next(
+                (voice for voice in voices if voice.id == primary_voice or voice.name == primary_voice),
+                None,
             )
-            if not isinstance(voices, list):
-                return []
-            # Find the primary voice's language
-            primary_lang = ""
-            for v in voices:
-                if not isinstance(v, dict):
-                    continue
-                if v.get("id") == primary_voice or v.get("name") == primary_voice:
-                    primary_lang = v.get("language", "") or ""
-                    break
+            primary_lang = primary.language if primary else ""
             if not primary_lang:
                 return []
-            # Collect same-language voices excluding the primary
             return [
-                (v.get("id") or v.get("name") or "")
-                for v in voices
-                if isinstance(v, dict)
-                and (v.get("id") or v.get("name") or "")
-                and (v.get("id") or v.get("name")) != primary_voice
-                and v.get("language") == primary_lang
+                voice.id
+                for voice in voices
+                if voice.id and voice.id != primary_voice and voice.language == primary_lang
             ]
         except Exception as e:
             logger.warning(f"Failed to fetch voice fallbacks: {e}")
             return []
-
-    # ------------------------------------------------------------------
-    # Local Kokoro ONNX (in-process, no HTTP service required)
-    # ------------------------------------------------------------------
-    # Default download URLs for Kokoro v1.0 model files
-    _KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
-    _KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
-
-    @staticmethod
-    def _download_file(url: str, dest: str) -> None:
-        """Download a file with progress logging."""
-        import requests
-        resp = requests.get(url, stream=True, timeout=300)
-        resp.raise_for_status()
-        total = int(resp.headers.get("content-length", 0))
-        downloaded = 0
-        last_logged = 0
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total > 0 and downloaded - last_logged >= 10 * 1024 * 1024:
-                    logger.info(
-                        f"  下载 {Path(dest).name}: "
-                        f"{downloaded // 1024 // 1024}MB / {total // 1024 // 1024}MB"
-                    )
-                    last_logged = downloaded
-        logger.info(f"  下载完成: {Path(dest).name} ({downloaded // 1024 // 1024}MB)")
-
-    @classmethod
-    def _get_kokoro(cls):
-        """Lazy-load the Kokoro ONNX singleton (thread-safe).
-
-        Uses ``KOKORO_MODEL_PATH`` / ``KOKORO_VOICES_PATH`` if configured.
-        Otherwise downloads model files to ``models/kokoro/`` on first use.
-        """
-        if cls._kokoro_instance is None:
-            with cls._kokoro_lock:
-                if cls._kokoro_instance is None:
-                    try:
-                        from kokoro_onnx import Kokoro
-                    except ImportError as e:
-                        raise RuntimeError(
-                            "本地 Kokoro 模式需要 kokoro-onnx 包。"
-                            "请运行: pip install kokoro-onnx soundfile"
-                        ) from e
-
-                    model_path = settings.KOKORO_MODEL_PATH or ""
-                    voices_path = settings.KOKORO_VOICES_PATH or ""
-
-                    # Auto-download to models/kokoro/ if paths not configured
-                    if not model_path or not voices_path:
-                        kokoro_dir = cls._default_kokoro_dir()
-                        kokoro_dir.mkdir(parents=True, exist_ok=True)
-                        if not model_path:
-                            model_path = str(kokoro_dir / "kokoro-v1.0.onnx")
-                        if not voices_path:
-                            voices_path = str(kokoro_dir / "voices-v1.0.bin")
-
-                    # Download missing files
-                    if not Path(model_path).exists():
-                        logger.info(f"正在下载 Kokoro 模型文件...")
-                        cls._download_file(cls._KOKORO_MODEL_URL, model_path)
-                    if not Path(voices_path).exists():
-                        logger.info(f"正在下载 Kokoro 音色文件...")
-                        cls._download_file(cls._KOKORO_VOICES_URL, voices_path)
-
-                    logger.info(
-                        f"Loading Kokoro ONNX model "
-                        f"(model={model_path}, voices={voices_path})..."
-                    )
-                    cls._kokoro_instance = Kokoro(model_path, voices_path)
-                    logger.info("Kokoro ONNX model loaded successfully.")
-        return cls._kokoro_instance
-
-    @classmethod
-    def _get_zh_g2p(cls):
-        """Lazy-load the misaki Chinese G2p converter (thread-safe).
-
-        kokoro-onnx uses espeak for phonemization, but the Kokoro model was
-        trained with misaki phonemes.  For Chinese, espeak's "cmn" mode
-        produces phonemes without tone markers, causing dialect-like
-        pronunciation.  Misaki's ZHG2P produces proper tone markers
-        (→↘↓↗ for the four Mandarin tones) that match the model's training
-        data, resulting in correct standard Mandarin pronunciation.
-        """
-        if cls._zh_g2p is None:
-            with cls._zh_g2p_lock:
-                if cls._zh_g2p is None:
-                    try:
-                        from misaki.zh import ZHG2P
-                    except ImportError as e:
-                        raise RuntimeError(
-                            "中文音素化需要 misaki 包。请运行: "
-                            "pip install 'misaki[zh]'"
-                        ) from e
-                    cls._zh_g2p = ZHG2P()
-                    logger.info("Misaki Chinese G2p converter initialized.")
-        return cls._zh_g2p
-
-    @classmethod
-    def _get_ja_g2p(cls):
-        """Lazy-load Misaki's Japanese G2P converter (thread-safe)."""
-        if cls._ja_g2p is None:
-            with cls._ja_g2p_lock:
-                if cls._ja_g2p is None:
-                    try:
-                        from misaki.ja import JAG2P
-                    except (ImportError, ModuleNotFoundError) as exc:
-                        raise RuntimeError(
-                            "日语 Kokoro 配音需要 Misaki 日语依赖。请运行: "
-                            "pip install 'misaki[ja]>=0.9.0'"
-                        ) from exc
-                    cls._ja_g2p = JAG2P(version="pyopenjtalk")
-                    logger.info("Misaki Japanese G2P converter initialized.")
-        return cls._ja_g2p
-
-    def _synthesize_one_local(
-        self, text: str, voice: str, speed: float
-    ) -> bytes:
-        """Synthesize a single segment via in-process Kokoro ONNX. Returns WAV bytes."""
-        kokoro = self._get_kokoro()
-        try:
-            import soundfile as sf
-        except ImportError as e:
-            raise RuntimeError(
-                "本地 Kokoro 模式需要 soundfile 包。请运行: pip install soundfile"
-            ) from e
-        import io
-
-        def create_once(chunk: str):
-            # For Chinese voices (prefix "z"), use misaki phonemization which
-            # includes tone markers matching the model's training data.
-            if voice[:1].lower() == "z":
-                g2p = self._get_zh_g2p()
-                result = g2p(chunk)
-                phonemes = result[0] if isinstance(result, tuple) else result
-                return kokoro.create(
-                    phonemes, voice=voice, speed=speed, is_phonemes=True
-                )
-
-            if voice[:1].lower() == "j":
-                g2p = self._get_ja_g2p()
-                result = g2p(chunk)
-                phonemes = result[0] if isinstance(result, tuple) else result
-                return kokoro.create(
-                    phonemes, voice=voice, speed=speed, is_phonemes=True
-                )
-
-            lang = _voice_to_kokoro_lang(voice)
-            try:
-                return kokoro.create(chunk, voice=voice, lang=lang, speed=speed)
-            except TypeError:
-                # Older kokoro-onnx versions may not accept the speed kwarg.
-                return kokoro.create(chunk, voice=voice, lang=lang)
-
-        def create_samples(chunk: str):
-            # Split before reaching Kokoro's roughly 510-phoneme ceiling. Some
-            # runtime/model combinations truncate instead of raising IndexError,
-            # so exception-only recovery can silently lose the end of a sentence.
-            if len(chunk) > 180:
-                left, right = self._split_local_tts_text(chunk)
-                if left and right:
-                    logger.info(
-                        "Splitting long Kokoro utterance proactively: %s + %s characters",
-                        len(left), len(right),
-                    )
-                    left_samples, left_rate = create_samples(left)
-                    right_samples, right_rate = create_samples(right)
-                    if left_rate != right_rate:
-                        raise RuntimeError("Kokoro split synthesis returned inconsistent sample rates")
-                    import numpy as np
-                    pause = np.zeros(max(int(left_rate * 0.04), 1), dtype=left_samples.dtype)
-                    return np.concatenate((left_samples, pause, right_samples)), left_rate
-            try:
-                return create_once(chunk)
-            except IndexError as exc:
-                # kokoro-onnx 0.4.x truncates inputs to 510 phonemes and then
-                # indexes voice[510]. Split at a natural boundary and retry so
-                # no spoken content is silently truncated.
-                if "out of bounds" not in str(exc) or len(chunk) < 2:
-                    raise
-                left, right = self._split_local_tts_text(chunk)
-                if not left or not right:
-                    raise
-                logger.warning(
-                    "Kokoro input exceeded its phoneme limit; retrying as %s + %s characters",
-                    len(left), len(right),
-                )
-                left_samples, left_rate = create_samples(left)
-                right_samples, right_rate = create_samples(right)
-                if left_rate != right_rate:
-                    raise RuntimeError("Kokoro split synthesis returned inconsistent sample rates")
-                import numpy as np
-                pause = np.zeros(max(int(left_rate * 0.04), 1), dtype=left_samples.dtype)
-                return np.concatenate((left_samples, pause, right_samples)), left_rate
-
-        samples, sample_rate = create_samples(text)
-
-        buf = io.BytesIO()
-        sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
-        return buf.getvalue()
-
-    @staticmethod
-    def _split_local_tts_text(text: str) -> Tuple[str, str]:
-        """Split near the middle, preferring sentence and phrase boundaries."""
-        midpoint = len(text) // 2
-        candidates = [
-            index + 1
-            for index, char in enumerate(text)
-            if char in "。！？!?；;、，,：: " and 0 < index + 1 < len(text)
-        ]
-        split_at = min(candidates, key=lambda value: abs(value - midpoint)) if candidates else midpoint
-        return text[:split_at].strip(), text[split_at:].strip()
-
-    def _get_local_voices(self) -> List[Dict[str, str]]:
-        """Return locally available Kokoro voices with language/gender metadata.
-
-        If the Kokoro model is already loaded, queries its actual voice list;
-        otherwise falls back to the static ``_KOKORO_V1_VOICES`` catalogue so
-        the UI works without loading the ~300 MB model.
-        """
-        if self._local_voices_cache is None:
-            voices = _KOKORO_V1_VOICES
-            # If the model is already loaded, prefer its actual voice list
-            if self._kokoro_instance is not None:
-                try:
-                    # get_voices() returns list[str], not a dict
-                    available = self._kokoro_instance.get_voices()
-                    if available:
-                        voices = sorted(available)
-                except Exception:
-                    pass
-            self._local_voices_cache = [_voice_metadata(v) for v in voices]
-        return self._local_voices_cache
 
     async def _synthesize_all(
         self,
@@ -622,6 +305,7 @@ class DubbingService:
         task_id: str,
         temp_dir: Path,
         provider: str | None = None,
+        language: str = "",
     ) -> List[Path]:
         """Synthesize all segments sequentially, return list of raw WAV paths.
 
@@ -634,22 +318,34 @@ class DubbingService:
 
         # Pre-fetch same-language fallback voices for resilience
         provider = provider or ("kokoro" if _is_kokoro_mode() else settings.TTS_MODE)
-        fallback_voices = [] if provider == "edge" else await self._fetch_voice_fallbacks(voice)
-        if fallback_voices:
-            logger.info(
-                f"Loaded {len(fallback_voices)} fallback voices for '{voice}': {fallback_voices}"
-            )
-
-        effective_voice = voice
         # In local mode no HTTP client is needed — kokoro-onnx runs in-process.
         # In speaches mode reuse a single client across all segments (connection pool).
-        client = None if provider in {"kokoro", "edge"} else self._http_client_factory(
-            verify=settings.VERIFY_SSL
+        client = (
+            None
+            if provider in {"kokoro", "edge", "cosyvoice", "qwen"}
+            else self._http_client_factory(verify=settings.VERIFY_SSL)
         )
+        adapter = self.tts_registry.create(provider)
+        if provider == "speaches" and client is not None:
+            adapter.bind_client(client)
+        effective_voice = voice
         try:
-            await self._lifecycle.startup(
+            stage_lifecycle = self._gpu_lifecycle if provider == "qwen" else self._lifecycle
+            await stage_lifecycle.startup(
                 task_id=task_id, stage="tts", provider=provider
             )
+            fallback_voices = (
+                []
+                if provider == "edge"
+                else await self._fetch_voice_fallbacks(voice, adapter)
+            )
+            if fallback_voices:
+                logger.info(
+                    "Loaded %s fallback voices for '%s': %s",
+                    len(fallback_voices),
+                    voice,
+                    fallback_voices,
+                )
             for i, seg in enumerate(segments):
                 self._check_cancelled(task_id)
                 text = (seg.text or "").strip()
@@ -669,7 +365,17 @@ class DubbingService:
                 for try_voice in voices_to_try:
                     try:
                         wav_bytes = await self._synthesize_one(
-                            client, text, try_voice, speed, provider
+                            client,
+                            text,
+                            try_voice,
+                            speed,
+                            provider,
+                            adapter=adapter,
+                            should_cancel=lambda: bool(
+                                self._cancel_events.get(task_id)
+                                and self._cancel_events[task_id].is_set()
+                            ),
+                            language=language,
                         )
                         if try_voice != effective_voice:
                             logger.warning(
@@ -678,6 +384,8 @@ class DubbingService:
                             )
                             effective_voice = try_voice  # switch permanently
                         break
+                    except TTSCancelled as exc:
+                        raise DubbingCancelled(str(exc)) from exc
                     except RuntimeError as e:
                         last_err = e
                         logger.warning(
@@ -704,11 +412,18 @@ class DubbingService:
                     },
                 )
         finally:
-            if client is not None:
-                await client.aclose()
-            await self._lifecycle.shutdown(
-                task_id=task_id, stage="tts", provider=provider
-            )
+            try:
+                close_adapter = getattr(adapter, "close", None)
+                if callable(close_adapter):
+                    await close_adapter()
+            finally:
+                try:
+                    if client is not None:
+                        await client.aclose()
+                finally:
+                    await stage_lifecycle.shutdown(
+                        task_id=task_id, stage="tts", provider=provider
+                    )
         return raw_paths
 
     # ------------------------------------------------------------------
@@ -891,15 +606,58 @@ class DubbingService:
         self._run_ffmpeg(cmd, f"normalize_natural({tempo_ratio:.3f}x)")
         return out_wav
 
+    def _trim_outer_silence(self, src_wav: Path, out_wav: Path) -> Path:
+        """Remove generated boundary silence without clipping quiet phonemes."""
+        silence_filter = (
+            "silenceremove="
+            "start_periods=1:start_duration=0.03:"
+            f"start_threshold={TTS_BOUNDARY_THRESHOLD_DB}dB:"
+            f"start_silence={TTS_LEADING_SAFETY_SECONDS},"
+            "areverse,"
+            "silenceremove=start_periods=1:start_duration=0.03:"
+            f"start_threshold={TTS_BOUNDARY_THRESHOLD_DB}dB:"
+            f"start_silence={TTS_TRAILING_SAFETY_SECONDS},"
+            "areverse"
+        )
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i",
+            str(src_wav),
+            "-af",
+            silence_filter,
+            "-ar",
+            str(settings.DUB_SAMPLE_RATE),
+            "-ac",
+            "1",
+            str(out_wav),
+        ]
+        self._run_ffmpeg(cmd, "trim_outer_silence")
+        return out_wav
+
     @staticmethod
     def _natural_timeline_end(
-        segments: List, durations: List[float], tempo_ratio: float
+        segments: List,
+        durations: List[float],
+        tempo_ratio: float,
+        sentence_gap: float = NATURAL_SENTENCE_GAP_SECONDS,
+        total_duration: float | None = None,
+        lead_seconds: float = 0.0,
     ) -> float:
         cursor = 0.0
         has_speech = False
-        for segment, duration in zip(segments, durations):
-            earliest = cursor + (NATURAL_SENTENCE_GAP_SECONDS if has_speech else 0.0)
-            actual_start = max(float(segment.start), earliest)
+        last_index = len(segments) - 1
+        for index, (segment, duration) in enumerate(zip(segments, durations)):
+            earliest = cursor + (sentence_gap if has_speech else 0.0)
+            preferred_start = max(0.0, float(segment.start) - lead_seconds)
+            if total_duration is not None and index == last_index:
+                latest_fitting_start = total_duration - (duration / tempo_ratio)
+                preferred_start = max(
+                    0.0,
+                    float(segment.start) - NATURAL_MAX_FINAL_LEAD_SECONDS,
+                    min(preferred_start, latest_fitting_start),
+                )
+            actual_start = max(preferred_start, earliest)
             cursor = actual_start + (duration / tempo_ratio)
             has_speech = True
         return cursor
@@ -942,6 +700,7 @@ class DubbingService:
         raw_paths: List[Path],
         total_duration: float,
         temp_dir: Path,
+        *, provider: str | None = None,
     ) -> Path:
         """Build a natural, non-overlapping timeline without per-line trimming."""
         fitted_dir = temp_dir / "fitted"
@@ -949,32 +708,137 @@ class DubbingService:
         list_file = temp_dir / "concat_list.txt"
         entries: List[str] = []
 
-        durations = [self._probe_duration(raw) for raw in raw_paths]
-        natural_end = self._natural_timeline_end(segments, durations, 1.0)
+        prepared_dir = temp_dir / "prepared"
+        prepared_dir.mkdir(parents=True, exist_ok=True)
+        prepared_paths: List[Path] = []
+        for index, raw in enumerate(raw_paths):
+            if not raw.is_file():
+                prepared_paths.append(raw)
+                continue
+            prepared = prepared_dir / f"seg_{index:06d}.wav"
+            try:
+                self._trim_outer_silence(raw, prepared)
+                if prepared.is_file() and self._probe_duration(prepared) > 0.05:
+                    prepared_paths.append(prepared)
+                    continue
+            except Exception as exc:
+                logger.warning("Failed to trim generated outer silence for segment %s: %s", index, exc)
+            prepared_paths.append(raw)
+
+        durations = [self._probe_duration(raw) for raw in prepared_paths]
+        sentence_gap = NATURAL_SENTENCE_GAP_SECONDS
+        max_uniform_tempo = (
+            NATURAL_MAX_UNIFORM_TEMPO
+            if provider == "qwen"
+            else NATURAL_MAX_ADJUSTABLE_TEMPO
+        )
+        natural_end = self._natural_timeline_end(
+            segments, durations, 1.0, sentence_gap, total_duration
+        )
         timeline_tempo = 1.0
+        lead_seconds = 0.0
         if natural_end > total_duration + 0.01:
+            led_end = self._natural_timeline_end(
+                segments,
+                durations,
+                1.0,
+                sentence_gap,
+                total_duration,
+                NATURAL_MAX_UTTERANCE_LEAD_SECONDS,
+            )
+            if led_end <= total_duration + 0.01:
+                low_lead, high_lead = 0.0, NATURAL_MAX_UTTERANCE_LEAD_SECONDS
+                for _ in range(16):
+                    middle_lead = (low_lead + high_lead) / 2
+                    if self._natural_timeline_end(
+                        segments,
+                        durations,
+                        1.0,
+                        sentence_gap,
+                        total_duration,
+                        middle_lead,
+                    ) > total_duration:
+                        low_lead = middle_lead
+                    else:
+                        high_lead = middle_lead
+                lead_seconds = high_lead
+            else:
+                lead_seconds = NATURAL_MAX_UTTERANCE_LEAD_SECONDS
+        if self._natural_timeline_end(
+            segments,
+            durations,
+            timeline_tempo,
+            sentence_gap,
+            total_duration,
+            lead_seconds,
+        ) > total_duration + 0.01:
             fastest_end = self._natural_timeline_end(
-                segments, durations, NATURAL_MAX_UNIFORM_TEMPO
+                segments,
+                durations,
+                max_uniform_tempo,
+                sentence_gap,
+                total_duration,
+                lead_seconds,
             )
             if fastest_end > total_duration + 0.01:
-                overflow = fastest_end - total_duration
-                raise ValueError(
-                    "自然配音内容过长，即使统一加速到 "
-                    f"{NATURAL_MAX_UNIFORM_TEMPO:.2f}x 仍超出视频 {overflow:.2f} 秒。"
-                    "请精简译文或提高配音语速后重试。"
+                tightest_end = self._natural_timeline_end(
+                    segments,
+                    durations,
+                    max_uniform_tempo,
+                    NATURAL_MIN_SENTENCE_GAP_SECONDS,
+                    total_duration,
+                    lead_seconds,
                 )
-            low, high = 1.0, NATURAL_MAX_UNIFORM_TEMPO
-            for _ in range(16):
-                middle = (low + high) / 2
-                if self._natural_timeline_end(segments, durations, middle) > total_duration:
-                    low = middle
-                else:
-                    high = middle
-            timeline_tempo = high
+                if tightest_end > total_duration + 0.01:
+                    overflow = tightest_end - total_duration
+                    advice = (
+                        "Qwen 当前固定为 1.00x 合成语速。请精简目标语言译文后重试，"
+                        "或在设置中选择支持调整语速的配音引擎。"
+                        if provider == "qwen" else "请精简译文或提高配音语速后重试。"
+                    )
+                    raise ValueError(
+                        "自然配音内容过长，即使统一加速到 "
+                        f"{max_uniform_tempo:.2f}x 仍超出视频 {overflow:.2f} 秒。"
+                        + advice
+                    )
+                low_gap, high_gap = NATURAL_MIN_SENTENCE_GAP_SECONDS, sentence_gap
+                for _ in range(16):
+                    middle_gap = (low_gap + high_gap) / 2
+                    if self._natural_timeline_end(
+                        segments,
+                        durations,
+                        max_uniform_tempo,
+                        middle_gap,
+                        total_duration,
+                        lead_seconds,
+                    ) <= total_duration:
+                        low_gap = middle_gap
+                    else:
+                        high_gap = middle_gap
+                sentence_gap = low_gap
+                timeline_tempo = max_uniform_tempo
+            else:
+                low, high = 1.0, max_uniform_tempo
+                for _ in range(16):
+                    middle = (low + high) / 2
+                    if self._natural_timeline_end(
+                        segments,
+                        durations,
+                        middle,
+                        sentence_gap,
+                        total_duration,
+                        lead_seconds,
+                    ) > total_duration:
+                        low = middle
+                    else:
+                        high = middle
+                timeline_tempo = high
         logger.info(
-            "Dubbing natural timeline uses one uniform tempo %.3fx "
-            "(groups=%s, natural_end=%.3fs, video=%.3fs)",
+            "Dubbing natural timeline uses one uniform tempo %.3fx, %.3fs sentence gaps, "
+            "and up to %.3fs distributed lead (groups=%s, natural_end=%.3fs, video=%.3fs)",
             timeline_tempo,
+            sentence_gap,
+            lead_seconds,
             len(segments),
             natural_end,
             total_duration,
@@ -982,9 +846,18 @@ class DubbingService:
 
         cursor = 0.0
         has_speech = False
-        for i, (seg, raw, raw_duration) in enumerate(zip(segments, raw_paths, durations)):
-            earliest = cursor + (NATURAL_SENTENCE_GAP_SECONDS if has_speech else 0.0)
-            actual_start = max(float(seg.start), earliest)
+        last_index = len(segments) - 1
+        for i, (seg, raw, raw_duration) in enumerate(zip(segments, prepared_paths, durations)):
+            earliest = cursor + (sentence_gap if has_speech else 0.0)
+            preferred_start = max(0.0, float(seg.start) - lead_seconds)
+            if i == last_index:
+                latest_fitting_start = total_duration - (raw_duration / timeline_tempo)
+                preferred_start = max(
+                    0.0,
+                    float(seg.start) - NATURAL_MAX_FINAL_LEAD_SECONDS,
+                    min(preferred_start, latest_fitting_start),
+                )
+            actual_start = max(preferred_start, earliest)
             gap = actual_start - cursor
             if gap > 0.005:
                 gap_wav = fitted_dir / f"gap_{i:06d}.wav"
@@ -1147,9 +1020,9 @@ class DubbingService:
 
         # Voice cloning requires Speaches' voice directory; local Kokoro uses
         # fixed voice embeddings and cannot accept arbitrary clone samples.
-        if clone_sample_path and _is_kokoro_mode():
+        if clone_sample_path and normalize_tts_mode(settings.TTS_MODE) in {"kokoro", "cosyvoice", "qwen"}:
             raise ValueError(
-                "语音克隆仅在 Speaches (API) 模式下可用。"
+                "当前本地 TTS Provider 不接受用户克隆样本。"
                 "请将 TTS_MODE 改为 speaches 或使用预设音色。"
             )
 
@@ -1164,7 +1037,7 @@ class DubbingService:
             raise ValueError("No subtitle data available for dubbing")
         provider = self.provider_for_language(getattr(result, "language", None) or lang_label)
         if provider == "edge" and clone_sample_path:
-            raise ValueError("Edge 韩语在线配音不支持语音克隆，请使用标准韩语音色。")
+            raise ValueError("Edge 在线配音不支持语音克隆，请使用标准预置音色。")
 
         temp_dir = Path(settings.TEMP_DIR) / f"dub_{task_id}"
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1202,14 +1075,20 @@ class DubbingService:
                 len(segments),
                 len(dubbing_segments),
             )
-            subtitle_duration = max(float(segments[-1].end), 0.1)
             probed_video_duration = self._probe_duration(video_path_obj)
-            total_duration = max(probed_video_duration, subtitle_duration)
+            total_duration = (
+                probed_video_duration
+                if probed_video_duration > 0
+                else max(float(segments[-1].end), 0.1)
+            )
 
             # Stage B: synthesize each segment
             logger.info(f"Dubbing task {task_id}: {len(segments)} segments, voice={effective_voice}")
             raw_paths = asyncio.run(
-                self._synthesize_all(dubbing_segments, effective_voice, speed, task_id, temp_dir, provider)
+                self._synthesize_all(
+                    dubbing_segments, effective_voice, speed, task_id, temp_dir, provider,
+                    getattr(result, "language", None) or lang_label,
+                )
             )
 
             # Stage C: align + build full track
@@ -1218,7 +1097,7 @@ class DubbingService:
                 {"status": "dubbing", "message": "正在对齐时间轴...", "progress": 70},
             )
             dub_track = self._build_timeline(
-                dubbing_segments, raw_paths, total_duration, temp_dir
+                dubbing_segments, raw_paths, total_duration, temp_dir, provider=provider
             )
 
             # Persist dub audio

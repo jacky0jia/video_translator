@@ -1,4 +1,4 @@
-"""Online Edge TTS provider used for Korean dubbing."""
+"""Online Edge TTS provider for Chinese, English, Japanese, and Korean dubbing."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +9,8 @@ import time
 from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+_SUPPORTED_LOCALES = {"zh": "zh", "en": "en", "ja": "ja", "ko": "ko"}
 
 
 class EdgeTTSService:
@@ -86,13 +88,14 @@ class EdgeTTSService:
         result = [
             {
                 "id": voice["ShortName"],
-                "language": "ko",
+                "name": voice.get("FriendlyName", voice["ShortName"]),
+                "language": str(voice.get("Locale", "")).lower().split("-", 1)[0],
                 "gender": str(voice.get("Gender", "")).lower(),
                 "provider": "edge",
                 "online": True,
             }
             for voice in voices
-            if str(voice.get("Locale", "")).lower().startswith("ko-")
+            if str(voice.get("Locale", "")).lower().split("-", 1)[0] in _SUPPORTED_LOCALES
         ]
         type(self)._voice_cache = result
         type(self)._voice_cache_at = time.monotonic()

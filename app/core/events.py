@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 from app.core.config import settings
@@ -9,6 +10,28 @@ logger = logging.getLogger(__name__)
 
 # In-memory event queues per task_id
 _task_queues: Dict[str, asyncio.Queue] = {}
+
+
+def _browser_event(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize output artifacts as HTTP paths without changing persisted state."""
+    def output_url(value):
+        if not isinstance(value, str):
+            return value
+        try:
+            relative = Path(value).relative_to(settings.OUTPUT_DIR)
+        except ValueError:
+            return value
+        return f"/static/output/{relative.as_posix()}"
+
+    result = dict(data)
+    for key in ("transcription_path", "translation_path", "burn_path",
+                "dubbing_audio_path", "dubbing_video_path", "dubbing_raw_video_path"):
+        if key in result:
+            result[key] = output_url(result[key])
+    for key in ("translations", "subtitle_outputs"):
+        if isinstance(result.get(key), dict):
+            result[key] = {name: output_url(value) for name, value in result[key].items()}
+    return result
 
 
 def _get_queue(task_id: str) -> asyncio.Queue:
@@ -43,7 +66,7 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
 
     # Send initial state if available
     if initial_data:
-        yield f"data: {json.dumps(initial_data)}\n\n"
+        yield f"data: {json.dumps(_browser_event(initial_data))}\n\n"
 
     try:
         while True:
@@ -55,10 +78,10 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
                 yield ":ping\n\n"
                 continue
 
-            yield f"data: {json.dumps(data)}\n\n"
+            yield f"data: {json.dumps(_browser_event(data))}\n\n"
 
             # Terminal statuses — close the stream
-            if data.get("status") in ("completed", "failed", "cancelled"):
+            if data.get("status") in ("transcribed", "completed", "failed", "cancelled"):
                 break
     except asyncio.CancelledError:
         # Normal shutdown, don't propagate to ASGI

@@ -3,127 +3,11 @@ import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { AboutSection, InterfaceSettingsSection, ServicesSection } from './SettingsSections';
-
-const FIELDS = [
-  { key: 'DEVICE_PREFERENCE', labelKey: 'devicePreference', type: 'select', options: ['auto', 'gpu', 'cpu'] },
-  { key: 'COMPUTE_TYPE', labelKey: 'computeType', type: 'select', options: ['auto', 'float16', 'int8'] },
-  { key: 'LLM_PROVIDER', labelKey: 'llmProvider', type: 'select', options: ['lm_studio', 'ollama', 'openai_compatible'], span: 2 },
-  { key: 'LM_STUDIO_BASE_URL', labelKey: 'lmStudioBaseUrl', type: 'text', span: 2 },
-  { key: 'LM_STUDIO_MODEL', labelKey: 'lmStudioModel', type: 'text', span: 2 },
-  { key: 'LM_STUDIO_CLI_PATH', labelKey: 'lmStudioCliPath', type: 'text', isPath: true, span: 2 },
-  { key: 'LM_STUDIO_PORT', labelKey: 'lmStudioPort', type: 'number' },
-  { key: 'LM_STUDIO_TTL_SECONDS', labelKey: 'lmStudioTtl', type: 'number' },
-  { key: 'OLLAMA_BASE_URL', labelKey: 'ollamaBaseUrl', type: 'text', span: 2 },
-  { key: 'OLLAMA_MODEL', labelKey: 'ollamaModel', type: 'text', span: 2 },
-  { key: 'OLLAMA_KEEP_ALIVE', labelKey: 'ollamaKeepAlive', type: 'text', span: 2, hintKey: 'ollamaKeepAliveHint' },
-  { key: 'LLM_API_BASE_URL', labelKey: 'llmApiBaseUrl', type: 'text', span: 2 },
-  { key: 'LLM_API_KEY', labelKey: 'llmApiKey', type: 'password', span: 2 },
-  { key: 'LLM_MODEL_NAME', labelKey: 'llmModelName', type: 'text', span: 2 },
-  { key: 'LLM_TEMPERATURE', labelKey: 'llmTemperature', type: 'number', step: 0.1 },
-  { key: 'TRANSLATION_BATCH_SIZE', labelKey: 'translationBatchSize', type: 'number' },
-  { key: 'CHUNKING_THRESHOLD_MINUTES', labelKey: 'chunkingThreshold', type: 'number' },
-  { key: 'FFMPEG_PATH', labelKey: 'ffmpegPath', type: 'text', isPath: true, span: 2 },
-  { key: 'TTS_MODE', labelKey: 'ttsMode', type: 'select', options: ['kokoro', 'edge', 'speaches'], hintKey: 'ttsModeHint', span: 2 },
-  { key: 'TTS_API_URL', labelKey: 'ttsApiUrl', type: 'text', span: 2 },
-  { key: 'TTS_API_KEY', labelKey: 'ttsApiKey', type: 'password', span: 2 },
-  { key: 'TTS_MODEL', labelKey: 'ttsModel', type: 'text', span: 2 },
-  { key: 'TTS_DEFAULT_VOICE', labelKey: 'ttsDefaultVoice', type: 'text' },
-  { key: 'TTS_SPEED', labelKey: 'ttsSpeed', type: 'number', step: 0.05 },
-  { key: 'DUB_SAMPLE_RATE', labelKey: 'dubSampleRate', type: 'number' },
-  { key: 'KOKORO_MODEL_PATH', labelKey: 'kokoroModelPath', type: 'text', isPath: true, span: 2, hintKey: 'kokoroPathHint' },
-  { key: 'KOKORO_VOICES_PATH', labelKey: 'kokoroVoicesPath', type: 'text', isPath: true, span: 2 },
-];
-
-// ASR fields rendered separately with a local/remote mode toggle
-const ASR_FIELDS = {
-  modelPath: { key: 'ASR_MODEL_PATH', labelKey: 'asrModelPath', type: 'text', isPath: true, span: 2 },
-  apiUrl: { key: 'ASR_API_URL', labelKey: 'asrApiUrl', type: 'text', span: 2 },
-  remoteModel: { key: 'ASR_REMOTE_MODEL', labelKey: 'asrRemoteModel', type: 'text', span: 2 },
-};
-
-const DEFAULTS = {
-  CHUNKING_THRESHOLD_MINUTES: 15,
-  CHUNK_OVERLAP_SECONDS: 3,
-  TRANSLATION_BATCH_SIZE: 10,
-  LLM_TEMPERATURE: 0.3,
-  LLM_PROVIDER: 'lm_studio',
-  LM_STUDIO_BASE_URL: 'http://127.0.0.1:1234/v1',
-  LM_STUDIO_CLI_PATH: 'lms',
-  LM_STUDIO_PORT: 1234,
-  LM_STUDIO_TTL_SECONDS: 300,
-  OLLAMA_BASE_URL: 'http://127.0.0.1:11434',
-  OLLAMA_KEEP_ALIVE: '5m',
-};
-
-function fieldMatchesProvider(field, provider) {
-  if (field.key.startsWith('LM_STUDIO_')) return provider === 'lm_studio';
-  if (field.key.startsWith('OLLAMA_')) return provider === 'ollama';
-  if (['LLM_API_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL_NAME'].includes(field.key)) {
-    return provider === 'openai_compatible';
-  }
-  return true;
-}
-
-function FieldRow({ f, config, handleChange, textMain, inputBg, inputBorder, models, fetchingModels, t, asrModelInfo, onBrowse }) {
-  return (
-    <div className={f.span === 2 ? 'md:col-span-2' : ''}>
-      <label className={`block text-sm font-medium mb-1 ${textMain}`}>{t(f.labelKey)}</label>
-      {f.hintKey && (
-        <p className="text-xs text-slate-400 dark:text-slate-500 mb-1">{t(f.hintKey)}</p>
-      )}
-      {f.type === 'select' ? (
-        <select value={config[f.key] || ''} onChange={e => handleChange(f.key, e.target.value)}
-          className={`w-full p-2 ${inputBg} rounded border ${inputBorder} text-sm ${textMain}`}>
-          {f.options.map(o => <option key={o} value={o}>{o}</option>)}
-        </select>
-      ) : f.isPath ? (
-        <div>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={config[f.key] || ''}
-              onChange={e => handleChange(f.key, e.target.value)}
-              placeholder={f.key === 'ASR_MODEL_PATH' ? t('asrModelPathPlaceholder') : t('ffmpegPathPlaceholder')}
-              className={`flex-1 p-2 ${inputBg} rounded border ${inputBorder} text-sm ${textMain}`}
-            />
-            <button
-              type="button"
-              onClick={() => onBrowse && onBrowse(f.key)}
-              className={`px-3 py-2 rounded text-sm border ${inputBorder} ${inputBg} hover:bg-gray-200 dark:hover:bg-slate-600 transition ${textMain}`}
-            >
-              {t('browse')}
-            </button>
-          </div>
-          {f.key === 'ASR_MODEL_PATH' && asrModelInfo && (
-            <p className={`text-xs mt-1 ${asrModelInfo.isValid ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
-              {asrModelInfo.message}
-            </p>
-          )}
-        </div>
-      ) : (f.key === 'LLM_MODEL_NAME' || f.key === 'OLLAMA_MODEL' || f.key === 'LM_STUDIO_MODEL') && models.length > 0 ? (
-        <div className="flex gap-2">
-          <select
-            value={config[f.key] || ''}
-            onChange={e => handleChange(f.key, e.target.value)}
-            className={`flex-1 p-2 ${inputBg} rounded border ${inputBorder} text-sm ${textMain}`}
-          >
-            {models.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
-          {fetchingModels && <span className="text-xs text-slate-400 self-center">...</span>}
-        </div>
-      ) : (
-        <input
-          type={f.type}
-          step={f.step || undefined}
-          value={config[f.key] ?? ''}
-          onChange={e => handleChange(f.key, e.target.value)}
-          placeholder={t(f.labelKey + 'Placeholder') || ''}
-          className={`w-full p-2 ${inputBg} rounded border ${inputBorder} text-sm ${textMain}`}
-        />
-      )}
-    </div>
-  );
-}
+import SettingsField from './settings/SettingsField';
+import QwenRuntimeStatus from './settings/QwenRuntimeStatus';
+import SettingsSection from './settings/SettingsSection';
+import { fieldIsVisible } from '../settings/visibility';
+import { pollRuntimeStatus } from '../settings/pollRuntimeStatus';
 
 export default function SettingsModal({ onClose }) {
   const showToast = useToast();
@@ -134,21 +18,73 @@ export default function SettingsModal({ onClose }) {
   const [models, setModels] = useState([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [lmStudioRuntimeReady, setLmStudioRuntimeReady] = useState(null);
+  const [lmStudioRefreshToken, setLmStudioRefreshToken] = useState(0);
+  const [lmStudioStatusError, setLmStudioStatusError] = useState(false);
   const modelFetchTimerRef = useRef(null);
+  const overlayPointerDownRef = useRef(false);
+  const asrDraftsRef = useRef({ localPath: '', remoteUrl: '', remoteModel: '' });
   const [asrModelInfo, setAsrModelInfo] = useState(null);
-  const [isLocal, setIsLocal] = useState(true);
+  const [isLocal, setIsLocal] = useState(null);
   const [asrMode, setAsrMode] = useState('local'); // 'local' | 'remote'
+  const [schema, setSchema] = useState(null);
+  const [capabilities, setCapabilities] = useState(null);
+  const [schemaError, setSchemaError] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [qwenInstall, setQwenInstall] = useState({ llama_archive: '', cuda_archive: '', model_directory: '', device: 'cuda' });
+  const [qwenInstalling, setQwenInstalling] = useState(false);
+  const [qwenInstallResult, setQwenInstallResult] = useState(null);
+  const [qwenPreflight, setQwenPreflight] = useState(null);
+  const [qwenPreflighting, setQwenPreflighting] = useState(false);
+  const [qwenInstallStatus, setQwenInstallStatus] = useState(null);
+  const [qwenRuntimeStatus, setQwenRuntimeStatus] = useState(null);
+  const [qwenRepairOpen, setQwenRepairOpen] = useState(false);
+  const [upstreamDependencies, setUpstreamDependencies] = useState(null);
 
   useEffect(() => {
-    fetch('/api/config').then(r => r.json()).then(d => {
+    if (!isLocal) return;
+    return pollRuntimeStatus(setQwenRuntimeStatus);
+  }, [isLocal]);
+
+  useEffect(() => {
+    Promise.all([
+      fetch('/api/config').then(r => r.ok ? r.json() : Promise.reject(new Error('config'))),
+      fetch('/api/config/schema').then(r => r.ok ? r.json() : Promise.reject(new Error('schema'))),
+      fetch('/api/capabilities').then(r => r.ok ? r.json() : null),
+      fetch('/api/hardware').then(r => r.ok ? r.json() : null),
+    ]).then(([d, schemaData, capabilityData, hardwareData]) => {
       setIsLocal(d.is_local !== false);
+      setUpstreamDependencies(d.upstream_dependencies || null);
       const merged = { ...d.config };
-      Object.entries(DEFAULTS).forEach(([key, val]) => {
-        if (merged[key] === undefined || merged[key] === null || merged[key] === '') {
-          merged[key] = val;
-        }
+      (schemaData.fields || []).forEach(field => {
+        if (merged[field.key] === undefined || merged[field.key] === null) merged[field.key] = field.default;
       });
+      setSchema(schemaData);
+      setCapabilities(capabilityData);
+      setHardware(hardwareData?.recommendation || null);
       setConfig(merged);
+      if (d.is_local !== false) {
+        fetch('/api/qwen-tts/install-status')
+          .then(response => response.ok ? response.json() : Promise.reject(new Error('install status')))
+          .then(data => {
+            setQwenInstallStatus(data);
+            if (data.upstream_sources) {
+              setQwenInstall(current => {
+                const defaults = data.upstream_sources[current.device === 'vulkan' ? 'vulkan' : 'cuda'];
+                return { ...current,
+                  llama_archive: current.llama_archive || defaults.llama_archive,
+                  cuda_archive: current.cuda_archive || defaults.cuda_archive,
+                  model_directory: current.model_directory || data.upstream_sources.model_directory,
+                };
+              });
+            }
+          })
+          .catch(() => setQwenInstallStatus({ installed: false, managed: false }));
+      }
+      asrDraftsRef.current = {
+        localPath: merged.ASR_MODEL_PATH || '',
+        remoteUrl: merged.ASR_API_URL || '',
+        remoteModel: merged.ASR_REMOTE_MODEL || '',
+      };
       // Determine ASR mode: remote if ASR_API_URL is set, else local
       const mode = merged.ASR_API_URL ? 'remote' : 'local';
       setAsrMode(mode);
@@ -179,8 +115,19 @@ export default function SettingsModal({ onClose }) {
           setAsrModelInfo(null);
         });
       }
+    }).catch(() => {
+      setSchemaError(true);
+      fetch('/api/config').then(r => r.json()).then(d => {
+        setIsLocal(d.is_local !== false);
+        const fallbackConfig = d.config || {};
+        setConfig(fallbackConfig);
+        asrDraftsRef.current = {
+          localPath: fallbackConfig.ASR_MODEL_PATH || '',
+          remoteUrl: fallbackConfig.ASR_API_URL || '',
+          remoteModel: fallbackConfig.ASR_REMOTE_MODEL || '',
+        };
+      }).catch(() => {});
     });
-    fetch('/api/hardware').then(r => r.json()).then(d => setHardware(d.recommendation));
   }, []);
 
   useEffect(() => {
@@ -214,19 +161,22 @@ export default function SettingsModal({ onClose }) {
     if (config.LLM_PROVIDER === 'lm_studio') {
       setFetchingModels(true);
       setLmStudioRuntimeReady(null);
+      setLmStudioStatusError(false);
       fetch('/api/lm-studio/status', { signal: AbortSignal.timeout(35000) })
         .then(async r => { if (!r.ok) throw new Error('LM Studio unavailable'); return r.json(); })
         .then(data => {
           const list = data.models || [];
           setModels(list);
-          setLmStudioRuntimeReady(data.runtime_ready !== false);
+          setLmStudioRuntimeReady(data.runtime_ready ?? null);
+          setLmStudioStatusError(data.healthy === false);
           if (!config.LM_STUDIO_MODEL && list.length) {
             setConfig(prev => ({ ...prev, LM_STUDIO_MODEL: list[0] }));
           }
         })
         .catch(() => {
           setModels([]);
-          setLmStudioRuntimeReady(false);
+          setLmStudioRuntimeReady(null);
+          setLmStudioStatusError(true);
         })
         .finally(() => setFetchingModels(false));
       return;
@@ -243,7 +193,7 @@ export default function SettingsModal({ onClose }) {
     return () => {
       if (modelFetchTimerRef.current) clearTimeout(modelFetchTimerRef.current);
     };
-  }, [config.LLM_PROVIDER, config.LLM_API_BASE_URL, config.LLM_API_KEY, config.OLLAMA_BASE_URL, config.LM_STUDIO_BASE_URL]);
+  }, [config.LLM_PROVIDER, config.LLM_API_BASE_URL, config.LLM_API_KEY, config.OLLAMA_BASE_URL, config.LM_STUDIO_BASE_URL, lmStudioRefreshToken]);
 
   const validateAsrPath = useCallback(async (path) => {
     if (!path) {
@@ -323,6 +273,9 @@ export default function SettingsModal({ onClose }) {
   }, []);
 
   const handleChange = (key, value) => {
+    if (key === 'ASR_MODEL_PATH') asrDraftsRef.current.localPath = value;
+    if (key === 'ASR_API_URL') asrDraftsRef.current.remoteUrl = value;
+    if (key === 'ASR_REMOTE_MODEL') asrDraftsRef.current.remoteModel = value;
     setConfig(prev => ({ ...prev, [key]: value }));
     if (key === 'ASR_API_URL' && asrMode === 'remote') {
       if (value) {
@@ -339,11 +292,15 @@ export default function SettingsModal({ onClose }) {
   const handleAsrModeChange = (mode) => {
     setAsrMode(mode);
     if (mode === 'local') {
-      // Clear remote ASR config so local takes effect
-      setConfig(prev => ({ ...prev, ASR_API_URL: '', ASR_REMOTE_MODEL: '' }));
+      asrDraftsRef.current.remoteUrl = config.ASR_API_URL || asrDraftsRef.current.remoteUrl;
+      asrDraftsRef.current.remoteModel = config.ASR_REMOTE_MODEL || asrDraftsRef.current.remoteModel;
+      const localPath = asrDraftsRef.current.localPath;
+      // Empty the remote selector so local ASR is active, but retain its draft
+      // for a later switch back within this settings session.
+      setConfig(prev => ({ ...prev, ASR_MODEL_PATH: localPath, ASR_API_URL: '', ASR_REMOTE_MODEL: '' }));
       // Re-validate local model
-      if (config.ASR_MODEL_PATH) {
-        validateAsrPath(config.ASR_MODEL_PATH);
+      if (localPath) {
+        validateAsrPath(localPath);
       } else {
         fetch('/api/models/asr').then(r => r.json()).then(d => {
           const list = d.models || [];
@@ -355,10 +312,14 @@ export default function SettingsModal({ onClose }) {
         }).catch(() => setAsrModelInfo(null));
       }
     } else {
-      // Clear local model path so remote takes effect
-      setConfig(prev => ({ ...prev, ASR_MODEL_PATH: '' }));
-      if (config.ASR_API_URL) {
-        setAsrModelInfo({ isValid: true, message: `${t('usingRemoteAsr')}: ${config.ASR_API_URL}` });
+      asrDraftsRef.current.localPath = config.ASR_MODEL_PATH || asrDraftsRef.current.localPath;
+      const remoteUrl = asrDraftsRef.current.remoteUrl;
+      const remoteModel = asrDraftsRef.current.remoteModel;
+      // Empty the local selector so remote ASR is active, but retain its draft
+      // for a later switch back within this settings session.
+      setConfig(prev => ({ ...prev, ASR_MODEL_PATH: '', ASR_API_URL: remoteUrl, ASR_REMOTE_MODEL: remoteModel }));
+      if (remoteUrl) {
+        setAsrModelInfo({ isValid: true, message: `${t('usingRemoteAsr')}: ${remoteUrl}` });
       } else {
         setAsrModelInfo(null);
       }
@@ -377,6 +338,7 @@ export default function SettingsModal({ onClose }) {
           const lastSep = Math.max(data.path.lastIndexOf('\\'), data.path.lastIndexOf('/'));
           finalPath = lastSep > 0 ? data.path.substring(0, lastSep) : data.path;
         }
+        if (key === 'ASR_MODEL_PATH') asrDraftsRef.current.localPath = finalPath;
         setConfig(prev => ({ ...prev, [key]: finalPath }));
         if (key === 'ASR_MODEL_PATH' && asrMode === 'local') {
           validateAsrPath(finalPath);
@@ -391,6 +353,8 @@ export default function SettingsModal({ onClose }) {
     e.preventDefault();
     // Strip ASR_MODEL_SIZE from config since it's no longer used
     const { ASR_MODEL_SIZE, ...payload } = config;
+    if (isLocal) payload.UI_LANGUAGE = lang;
+    else delete payload.UI_LANGUAGE;
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -406,18 +370,100 @@ export default function SettingsModal({ onClose }) {
     }
   };
 
+  const handleQwenInstall = async () => {
+    setQwenInstalling(true);
+    setQwenInstallResult(null);
+    try {
+      const response = await fetch('/api/qwen-tts/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(qwenInstall),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || t('qwenInstallFailed'));
+      setQwenInstallResult(data);
+      setQwenInstallStatus(data);
+      showToast(t('qwenInstallSucceeded'), 'success');
+    } catch (error) {
+      showToast(`${t('qwenInstallFailed')}: ${error.message}`, 'error');
+    } finally {
+      setQwenInstalling(false);
+    }
+  };
+
+  const handleQwenPreflight = async () => {
+    setQwenPreflighting(true);
+    setQwenPreflight(null);
+    try {
+      const response = await fetch('/api/qwen-tts/preflight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(qwenInstall),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || t('qwenPreflightFailed'));
+      setQwenPreflight(data);
+    } catch (error) {
+      showToast(`${t('qwenPreflightFailed')}: ${error.message}`, 'error');
+    } finally {
+      setQwenPreflighting(false);
+    }
+  };
+
+  const updateQwenInstall = (key, value) => {
+    setQwenInstall(current => {
+      const next = { ...current, [key]: value };
+      const sources = qwenInstallStatus?.upstream_sources;
+      if (key === 'device' && sources) {
+        const previous = sources[current.device === 'vulkan' ? 'vulkan' : 'cuda'];
+        const defaults = sources[value === 'vulkan' ? 'vulkan' : 'cuda'];
+        for (const field of ['llama_archive', 'cuda_archive']) {
+          if (!current[field] || current[field] === previous[field]) next[field] = defaults[field];
+        }
+      }
+      return next;
+    });
+    setQwenPreflight(null);
+    setQwenInstallResult(null);
+  };
+
+  const gib = bytes => (Number(bytes || 0) / (1024 ** 3)).toFixed(2);
+
   const inputBg = 'bg-gray-100 dark:bg-slate-700';
   const inputBorder = 'border-gray-300 dark:border-slate-600';
   const textMuted = 'text-slate-500 dark:text-slate-400';
   const textMain = 'text-slate-900 dark:text-white';
 
   const fieldProps = {
-    config, handleChange, textMain, inputBg, inputBorder, models, fetchingModels, t, asrModelInfo, onBrowse: handleBrowse
+    config, onChange: handleChange, textMain, inputBg, inputBorder, models, fetchingModels, t, asrModelInfo, onBrowse: handleBrowse
   };
+  const fieldsByKey = Object.fromEntries((schema?.fields || []).map(field => [field.key, field]));
+  const asrKeys = new Set(['ASR_MODEL_PATH', 'ASR_API_URL', 'ASR_REMOTE_MODEL', 'UI_LANGUAGE']);
+  const visibleFields = (schema?.fields || []).filter(field =>
+    !asrKeys.has(field.key)
+    && (showAdvanced || field.level !== 'advanced')
+    && fieldIsVisible(field, { ...config, ASR_MODE: asrMode })
+  );
+  const advancedFieldCount = (schema?.fields || []).filter(field =>
+    !asrKeys.has(field.key)
+    && field.level === 'advanced'
+    && fieldIsVisible(field, { ...config, ASR_MODE: asrMode })
+  ).length;
+  const qwenNeedsCudaArchive = qwenInstall.device !== 'vulkan';
+  const qwenSourcesReady = Boolean(
+    qwenInstall.llama_archive
+    && qwenInstall.model_directory
+    && (!qwenNeedsCudaArchive || qwenInstall.cuda_archive)
+  );
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      onPointerDown={e => { overlayPointerDownRef.current = e.target === e.currentTarget; }}
+      onClick={e => {
+        const isOverlayClick = overlayPointerDownRef.current && e.target === e.currentTarget;
+        overlayPointerDownRef.current = false;
+        if (isOverlayClick) onClose();
+      }}>
       <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
         <div className="flex justify-between items-center mb-6 border-b border-gray-200 dark:border-slate-700 pb-3">
           <h2 className={`text-xl font-semibold ${textMain}`}>{t('settings')}</h2>
@@ -431,9 +477,21 @@ export default function SettingsModal({ onClose }) {
         )}
 
         <form onSubmit={handleSubmit}>
-          {!isLocal && (
+          {isLocal && upstreamDependencies?.user_install && (
+            <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+              <p>{t('upstreamDependenciesHint')}</p>
+              {upstreamDependencies.missing?.length > 0 && <p className="mt-1">{t('upstreamDependenciesMissing')}: {upstreamDependencies.missing.join(', ')}</p>}
+              <a className="mt-2 inline-block underline" href="/api/dependencies/install-guide" target="_blank" rel="noreferrer">{t('upstreamDependenciesGuide')}</a>
+            </div>
+          )}
+          {isLocal === false && (
             <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-300">
               {t('remoteSettingsHint')}
+            </div>
+          )}
+          {schemaError && (
+            <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+              {t('settingsSchemaLoadFailed')}
             </div>
           )}
           <InterfaceSettingsSection lang={lang} setLanguage={setLanguage} theme={theme} setTheme={setTheme} inputBg={inputBg} inputBorder={inputBorder} textMain={textMain} />
@@ -457,12 +515,12 @@ export default function SettingsModal({ onClose }) {
                 </label>
               </div>
               {asrMode === 'local' && isLocal && (
-                <FieldRow f={ASR_FIELDS.modelPath} {...fieldProps} />
+                fieldsByKey.ASR_MODEL_PATH && <SettingsField field={fieldsByKey.ASR_MODEL_PATH} {...fieldProps} />
               )}
               {asrMode === 'remote' && (
                 <div className="space-y-4">
-                  <FieldRow f={ASR_FIELDS.apiUrl} {...fieldProps} />
-                  <FieldRow f={ASR_FIELDS.remoteModel} {...fieldProps} />
+                  {fieldsByKey.ASR_API_URL && <SettingsField field={fieldsByKey.ASR_API_URL} {...fieldProps} />}
+                  {fieldsByKey.ASR_REMOTE_MODEL && <SettingsField field={fieldsByKey.ASR_REMOTE_MODEL} {...fieldProps} />}
                   {asrModelInfo && (
                     <p className={`text-xs ${asrModelInfo.isValid ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
                       {asrModelInfo.message}
@@ -472,19 +530,122 @@ export default function SettingsModal({ onClose }) {
               )}
             </div>
 
-            {config.LLM_PROVIDER === 'lm_studio' && lmStudioRuntimeReady === false && (
-              <div className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                {t('lmStudioRuntimeMissing')}
+            {isLocal && config.TTS_MODE === 'qwen' && (
+              <div className="md:col-span-2 space-y-3 rounded-lg border border-slate-300 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-700/30">
+                <div>
+                  <h3 className={`text-sm font-semibold ${textMain}`}>{t('qwenPrivateRuntimeInstall')}</h3>
+                  <p className={`mt-1 text-xs ${textMuted}`}>{t('qwenPrivateRuntimeInstallHint')}</p>
+                </div>
+                {qwenInstallStatus?.installed && qwenInstallStatus?.managed && (
+                  <p role="status" className="rounded border border-green-300 bg-green-50 p-2 text-sm text-green-800 dark:border-green-700 dark:bg-green-900/20 dark:text-green-200">
+                    {t('qwenCurrentlyInstalled')}: {qwenInstallStatus.runtime_version} · {qwenInstallStatus.device?.toUpperCase()} · {gib(qwenInstallStatus.installed_bytes)} GiB
+                  </p>
+                )}
+                {qwenInstallStatus?.installed && !qwenInstallStatus?.managed && (
+                  <p role="alert" className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                    {t('qwenLegacyRuntimeDetected')}
+                  </p>
+                )}
+                <QwenRuntimeStatus status={qwenRuntimeStatus} t={t} className={`text-sm ${textMuted}`} />
+                {qwenInstallStatus?.managed && !qwenRepairOpen && (
+                  <button type="button" onClick={() => setQwenRepairOpen(true)} className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                    {t('qwenRepairRuntime')}
+                  </button>
+                )}
+                {qwenInstallStatus !== null && (!qwenInstallStatus.managed || qwenRepairOpen) && <>
+                {qwenInstallStatus.upstream_sources && <p className={`text-xs ${textMuted}`}>{t('qwenSourcesAutofilled')}</p>}
+                {[
+                  ['llama_archive', qwenInstall.device === 'vulkan' ? 'qwenVulkanArchive' : 'qwenLlamaArchive', qwenInstall.device === 'vulkan' ? 'C:\\Downloads\\llama-b10792-bin-win-vulkan-x64.zip' : 'C:\\Downloads\\llama-b10792-bin-win-cuda-12.4-x64.zip'],
+                  ...(qwenNeedsCudaArchive ? [['cuda_archive', 'qwenCudaArchive', 'C:\\Downloads\\cudart-llama-bin-win-cuda-12.4-x64.zip']] : []),
+                  ['model_directory', 'qwenModelDirectory', 'C:\\Users\\name\\.lmstudio\\models\\...'],
+                ].map(([key, label, placeholder]) => (
+                  <label key={key} className={`block text-xs ${textMain}`}>
+                    <span className="mb-1 block font-medium">{t(label)}</span>
+                    <input
+                      type="text"
+                      value={qwenInstall[key]}
+                      placeholder={placeholder}
+                      disabled={qwenInstalling}
+                      onChange={event => updateQwenInstall(key, event.target.value)}
+                      className={`w-full rounded border px-3 py-2 text-sm ${inputBg} ${inputBorder}`}
+                    />
+                  </label>
+                ))}
+                <label className={`block text-xs ${textMain}`}>
+                  <span className="mb-1 block font-medium">{t('qwenInstallDevice')}</span>
+                  <select value={qwenInstall.device} disabled={qwenInstalling}
+                    onChange={event => updateQwenInstall('device', event.target.value)}
+                    className={`rounded border px-3 py-2 text-sm ${inputBg} ${inputBorder}`}>
+                    <option value="cuda">NVIDIA CUDA</option>
+                    <option value="vulkan">AMD Vulkan</option>
+                    <option value="cpu">CPU</option>
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleQwenPreflight}
+                    disabled={qwenPreflighting || qwenInstalling || !qwenSourcesReady}
+                    aria-busy={qwenPreflighting}
+                    className="rounded border border-blue-600 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-blue-300 dark:hover:bg-slate-700">
+                    {t(qwenPreflighting ? 'qwenPreflighting' : 'qwenPreflight')}
+                  </button>
+                  <button type="button" onClick={handleQwenInstall}
+                    disabled={qwenInstalling || !qwenPreflight?.ready}
+                    aria-busy={qwenInstalling}
+                    className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    {t(qwenInstalling ? 'qwenInstalling' : 'qwenInstall')}
+                  </button>
+                </div>
+                {qwenPreflight && (
+                  <p role={qwenPreflight.ready ? 'status' : 'alert'} className={`text-sm ${qwenPreflight.ready ? 'text-green-700 dark:text-green-300' : 'text-amber-700 dark:text-amber-300'}`}>
+                    {t(qwenPreflight.ready ? 'qwenPreflightReady' : 'qwenPreflightNoSpace')}: {gib(qwenPreflight.required_bytes)} GiB / {gib(qwenPreflight.free_bytes)} GiB
+                  </p>
+                )}
+                {qwenInstallResult?.installed && (
+                  <p role="status" className="text-sm text-green-700 dark:text-green-300">
+                    {t('qwenInstallReady')}: {qwenInstallResult.model} · {qwenInstallResult.device.toUpperCase()}
+                  </p>
+                )}
+                </>}
               </div>
             )}
 
-            {FIELDS.filter(f => (isLocal || !f.isPath) && fieldMatchesProvider(f, config.LLM_PROVIDER)).map(f => (
-              <FieldRow key={f.key} f={f} {...fieldProps} />
+            {schema?.sections.map(section => (
+              <SettingsSection key={section.id} section={section} t={t}>
+                {visibleFields.filter(field => field.section === section.id).map(field => (
+                  <SettingsField key={field.key} field={field} {...fieldProps} />
+                ))}
+                {section.id === 'translation' && config.LLM_PROVIDER === 'lm_studio' && <>
+                  {lmStudioRuntimeReady === false && (
+                    <div role="alert" className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                      {t('lmStudioRuntimeMissing')}
+                    </div>
+                  )}
+                  {lmStudioStatusError && (
+                    <div role="alert" className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                      {t('lmStudioDiagnosticsUnavailable')}
+                    </div>
+                  )}
+                  <div className="md:col-span-2">
+                    <button type="button" disabled={fetchingModels} aria-busy={fetchingModels} aria-live="polite"
+                      onClick={() => setLmStudioRefreshToken(token => token + 1)}
+                      className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                      {fetchingModels ? t('detecting') : t('refreshLmStudioDiagnostics')}
+                    </button>
+                  </div>
+                </>}
+              </SettingsSection>
             ))}
+            {advancedFieldCount > 0 && (
+              <div className="md:col-span-2">
+                <button type="button" aria-expanded={showAdvanced} onClick={() => setShowAdvanced(value => !value)} className={`rounded border px-3 py-2 text-sm ${inputBorder} ${inputBg} ${textMain}`}>
+                  {t(showAdvanced ? 'hideAdvancedSettings' : 'showAdvancedSettings')} ({advancedFieldCount})
+                </button>
+              </div>
+            )}
           </div>
           </ServicesSection>
 
-          <AboutSection />
+          <AboutSection edition={capabilities?.edition || 'standard'} t={t} />
 
           <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-gray-200 dark:border-slate-700">
             <button type="button" onClick={onClose}

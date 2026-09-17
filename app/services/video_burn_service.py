@@ -110,31 +110,50 @@ class VideoBurnService:
 
     @staticmethod
     def _video_encode_args(encoder: Optional[str], source_bitrate: Optional[int]) -> list[str]:
-        """Build bounded rate-control args with modest subtitle headroom."""
+        """Stay near the source size while leaving headroom for scene transitions."""
         if source_bitrate:
-            target = max(int(source_bitrate * 1.10), 400_000)
-            max_rate = int(target * 1.35)
-            buffer_size = target * 2
-            common = [
-                "-b:v", str(target),
-                "-maxrate", str(max_rate),
-                "-bufsize", str(buffer_size),
-            ]
+            # Burning subtitles always requires a full re-encode. A max rate close
+            # to the source average starves sudden scene changes and produces a
+            # short burst of macroblocking. Reserve a little of the average budget
+            # for those peaks, then give the encoder a wider VBV window.
+            target = str(int(source_bitrate * 0.92))
+            maxrate = str(source_bitrate * 3)
+            bufsize = str(source_bitrate * 4)
             if encoder == "h264_nvenc":
-                return ["-c:v", encoder, "-preset", "fast", *common]
+                return [
+                    "-c:v", encoder, "-preset", "p7", "-tune", "hq", "-rc", "vbr",
+                    "-multipass", "fullres", "-profile:v", "high", "-b:v", target,
+                    "-maxrate", maxrate, "-bufsize", bufsize,
+                    "-spatial_aq", "1", "-temporal_aq", "1", "-rc-lookahead", "32",
+                    "-bf", "3", "-b_ref_mode", "middle",
+                ]
             if encoder == "h264_qsv":
-                return ["-c:v", encoder, "-preset", "fast", *common]
+                return [
+                    "-c:v", encoder, "-preset", "slow", "-b:v", target,
+                    "-maxrate", maxrate, "-bufsize", bufsize,
+                ]
             if encoder == "h264_amf":
-                return ["-c:v", encoder, "-preset", "fast", *common]
-            return ["-c:v", "libx264", "-preset", "medium", *common]
-
+                return [
+                    "-c:v", encoder, "-quality", "quality", "-rc", "vbr_peak",
+                    "-b:v", target, "-maxrate", maxrate, "-bufsize", bufsize,
+                ]
+            return [
+                "-c:v", "libx264", "-preset", "slow", "-b:v", target,
+                "-maxrate", maxrate, "-bufsize", bufsize,
+            ]
         if encoder == "h264_nvenc":
-            return ["-c:v", encoder, "-cq", "23", "-preset", "fast"]
+            return [
+                "-c:v", encoder, "-preset", "p5", "-rc", "vbr",
+                "-cq", "20", "-b:v", "0",
+            ]
         if encoder == "h264_qsv":
-            return ["-c:v", encoder, "-global_quality", "25", "-preset", "fast"]
+            return ["-c:v", encoder, "-global_quality", "20", "-preset", "medium"]
         if encoder == "h264_amf":
-            return ["-c:v", encoder, "-qp_p", "25", "-qp_i", "25", "-preset", "fast"]
-        return ["-c:v", "libx264", "-crf", "23", "-preset", "medium"]
+            return [
+                "-c:v", encoder, "-quality", "quality", "-rc", "cqp",
+                "-qp_p", "20", "-qp_i", "20",
+            ]
+        return ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
 
     def _generate_ass(
         self,

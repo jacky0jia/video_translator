@@ -1,18 +1,19 @@
 """Dubbing API routes. Mirrors the structure of `app/api/burn.py`."""
 import logging
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
-import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.history import history_manager
 from app.services.dubbing_service import dubbing_service
-from app.services.dubbing_service import _KOKORO_V1_VOICES, _voice_metadata, _is_kokoro_mode
-from app.services.edge_tts_service import EdgeTTSService
+from app.services.dubbing_service import _is_kokoro_mode
+from app.services.tts.registry import is_korean_language, resolve_tts_route
+from app.services.tts.voice_selection import resolve_available_voice
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,7 +35,7 @@ def _requested_language(task: dict, target_lang: Optional[str]) -> str:
 
 
 def _is_korean(language: str) -> bool:
-    return language in {"ko", "ko-kr", "korean", "한국어", "韩语", "韓語"}
+    return is_korean_language(language)
 
 
 def _run_dubbing_task(
@@ -79,22 +80,37 @@ async def start_dubbing(request: DubbingRequest, background_tasks: BackgroundTas
         raise HTTPException(status_code=400, detail="TTS_API_URL not configured")
 
     requested_language = _requested_language(task, request.target_lang)
+    route = resolve_tts_route(settings.TTS_MODE, requested_language)
     voice = request.voice
-    if settings.TTS_MODE == "edge" and not _is_korean(requested_language):
+    if route.provider_id == "kokoro" and _is_korean(requested_language):
         raise HTTPException(
             status_code=400,
-            detail="当前 Edge provider 仅用于韩语配音；其它语言请选择 Kokoro 或 Speaches。",
+            detail="Kokoro 不支持韩语配音；请选择中文、英文或日文，或切换到 Edge/Qwen。",
         )
-    if _is_korean(requested_language):
+    if route.provider_id == "edge":
         if request.clone_sample_path:
-            raise HTTPException(status_code=400, detail="Edge 韩语在线配音不支持语音克隆")
-        if not voice.lower().startswith("ko-kr-"):
-            voice = "ko-KR-SunHiNeural"
-
+            raise HTTPException(status_code=400, detail="Edge 在线配音不支持语音克隆")
     if not (0.25 <= request.speed <= 4.0):
         raise HTTPException(status_code=400, detail="speed must be in [0.25, 4.0]")
-    if not _is_korean(requested_language) and _is_kokoro_mode() and not (0.5 <= request.speed <= 2.0):
+    if route.provider_id == "kokoro" and not (0.5 <= request.speed <= 2.0):
         raise HTTPException(status_code=400, detail="Kokoro speed must be in [0.5, 2.0]")
+    if route.provider_id in {"cosyvoice", "qwen"}:
+        if request.speed != 1.0:
+            raise HTTPException(status_code=400, detail="Local cloned-voice generation speed must be 1.0")
+        if request.clone_sample_path:
+            raise HTTPException(
+                status_code=400,
+                detail="当前本地 Base 模型仅支持应用预置音色，不接受用户克隆样本。",
+            )
+
+    if route.provider_id in {"kokoro", "cosyvoice", "qwen", "edge"}:
+        try:
+            voice = await resolve_available_voice(
+                dubbing_service.tts_registry, route, voice, requested_language
+            )
+        except Exception as exc:
+            logger.warning("Voice selection failed for %s: %s", route.provider_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     background_tasks.add_task(
         _run_dubbing_task,
@@ -117,64 +133,92 @@ async def list_voices():
     with language/gender metadata.  In speaches mode, proxies Speaches
     /v1/audio/voices so the frontend doesn't connect directly.
     """
+    registry = dubbing_service.tts_registry
     edge_voices = []
     edge_error = None
-    try:
-        edge_voices = await EdgeTTSService(settings.ffmpeg_path).list_voices()
-    except Exception as exc:
-        edge_error = str(exc)
-        logger.warning("Failed to fetch Edge Korean voices: %s", exc)
+    if settings.TTS_MODE == "edge":
+        try:
+            edge_voices = [asdict(voice) for voice in await registry.create("edge").list_voices()]
+        except Exception as exc:
+            edge_error = str(exc)
+            logger.warning("Failed to fetch Edge voices: %s", exc)
     if _is_kokoro_mode():
+        kokoro_voices = [
+            asdict(voice) for voice in await registry.create("kokoro").list_voices()
+        ]
         return {
-            "voices": dubbing_service._get_local_voices() + edge_voices,
-            "tts_mode": "kokoro_edge",
-            "unsupported_languages": [] if edge_voices else ["ko"],
-            "online_languages": ["ko"],
-            "privacy_notice": "韩语文本会发送到 Microsoft Edge 在线语音服务。",
-            "edge_error": edge_error,
+            "voices": kokoro_voices,
+            "tts_mode": "kokoro",
+            "supported_languages": ["Chinese", "English", "Japanese"],
+            "unsupported_languages": ["ko"],
+            "online_languages": [],
         }
     if settings.TTS_MODE == "edge":
         return {
             "voices": edge_voices,
             "tts_mode": "edge",
+            "supported_languages": ["Chinese", "English", "Japanese", "Korean"],
+            "unsupported_languages": [] if edge_voices else ["zh", "en", "ja", "ko"],
+            "online_languages": ["zh", "en", "ja", "ko"],
+            "privacy_notice": "配音文本会发送到 Microsoft Edge 在线语音服务。",
+            "edge_error": edge_error,
+        }
+    if settings.TTS_MODE == "cosyvoice":
+        try:
+            voices = [
+                asdict(voice)
+                for voice in await registry.create("cosyvoice").list_voices()
+            ]
+            error = None
+        except Exception as exc:
+            logger.warning("CosyVoice bundle is unavailable: %s", exc)
+            voices, error = [], str(exc)
+        response = {
+            "voices": voices + edge_voices,
+            "tts_mode": "cosyvoice_edge",
             "unsupported_languages": [] if edge_voices else ["ko"],
             "online_languages": ["ko"],
             "privacy_notice": "韩语文本会发送到 Microsoft Edge 在线语音服务。",
             "edge_error": edge_error,
         }
+        if error:
+            response["error"] = error
+        return response
+    if settings.TTS_MODE == "qwen":
+        try:
+            voices = [asdict(voice) for voice in await registry.create("qwen").list_voices()]
+            error = None
+        except Exception as exc:
+            logger.warning("Qwen3-TTS bundle is unavailable: %s", exc)
+            voices, error = [], str(exc)
+        response = {
+            "voices": voices,
+            "tts_mode": "qwen",
+            "supported_languages": ["Chinese", "English", "Japanese", "Korean"],
+            "unsupported_languages": [],
+            "online_languages": [],
+            "privacy_notice": "Qwen3-TTS 配音完全在本机处理。",
+        }
+        if error:
+            response["error"] = error
+        return response
     if not settings.TTS_API_URL:
         return {"voices": [], "error": "TTS_API_URL not configured"}
-    # Full Kokoro v1.0 voice catalogue with metadata — used as fallback when
-    # Speaches' /v1/audio/voices endpoint returns empty (which it does for
-    # Kokoro models).  Returning objects with {id, language, gender} lets the
-    # frontend filter voices by dubbing language.
-    kokoro_voices = [_voice_metadata(v) for v in _KOKORO_V1_VOICES]
+    kokoro_voices = [
+        asdict(voice) for voice in await registry.create("kokoro").list_voices()
+    ]
     try:
-        async with httpx.AsyncClient(timeout=10.0, verify=settings.VERIFY_SSL) as client:
-            resp = await client.get(
-                f"{dubbing_service._base_url}/v1/audio/voices",
-                headers=dubbing_service._headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            # Speaches may return {"voices":[...]} or a bare list
-            if isinstance(data, dict) and "voices" in data:
-                voices = data["voices"]
-            elif isinstance(data, list):
-                voices = data
-            else:
-                voices = []
-            if not voices:
-                # Speaches' /v1/audio/voices doesn't list Kokoro's built-in
-                # voices — use the full static catalogue instead.
-                voices = kokoro_voices
-            return {
-                "voices": voices + edge_voices,
-                "tts_mode": "speaches_edge",
-                "unsupported_languages": [],
-                "online_languages": ["ko"],
-                "privacy_notice": "韩语文本会发送到 Microsoft Edge 在线语音服务。",
-            }
+        voices = [
+            asdict(voice)
+            for voice in await registry.create("speaches").list_voices()
+        ] or kokoro_voices
+        return {
+            "voices": voices + edge_voices,
+            "tts_mode": "speaches_edge",
+            "unsupported_languages": [],
+            "online_languages": ["ko"],
+            "privacy_notice": "韩语文本会发送到 Microsoft Edge 在线语音服务。",
+        }
     except Exception as e:
         logger.warning(f"Failed to fetch voices from Speaches: {e}")
         return {"voices": kokoro_voices + edge_voices, "error": str(e), "online_languages": ["ko"]}

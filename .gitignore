@@ -55,9 +55,15 @@ app/history.json
 # Local Codex recovery and validation artifacts
 .codex-backups/
 .codex-test-runs/
+/5700xt-test/
 .playwright-cli/
 *.bundle
 
 # Private development and validation material
 /tests/
 /specs/
+
+# Personal planning and collaboration notes
+/specs/next-conversation-handoff.md
+/COLLABORATION-GUIDE.zh-CN.md
+/PRODUCT-ROADMAP.md

@@ -27,10 +27,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-      - name: Compile backend
-        run: python -m compileall -q app
+          python -m pip install -r requirements-dev.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -43,13 +40,5 @@ jobs:
         working-directory: app/frontend
         run: npm ci
 
-      - name: Audit production dependencies
-        working-directory: app/frontend
-        run: npm audit --omit=dev --audit-level=high
-
-      - name: Build frontend
-        working-directory: app/frontend
-        run: npm run build
-
-      - name: Import backend application
-        run: python -c "from app.main import app; assert app.title"
+      - name: Run release acceptance checks
+        run: python packaging/release_check.py --production-audit

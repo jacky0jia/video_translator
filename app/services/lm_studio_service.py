@@ -53,7 +53,8 @@ class LMStudioService:
             time.sleep(0.5)
         raise RuntimeError("LM Studio server did not start within 20 seconds")
 
-    def list_models(self) -> list[str]:
+    def list_model_details(self) -> list[dict]:
+        """Return a path-free subset of model metadata reported by lms."""
         result = self._run("ls", "--llm", "--json", timeout=30)
         try:
             data = json.loads(result.stdout or "[]")
@@ -61,11 +62,22 @@ class LMStudioService:
             raise RuntimeError("LM Studio returned an invalid model list") from exc
         if not isinstance(data, list):
             return []
+        public_keys = (
+            "modelKey",
+            "displayName",
+            "format",
+            "architecture",
+            "paramsString",
+            "sizeBytes",
+        )
         return [
-            str(item.get("modelKey"))
+            {key: item[key] for key in public_keys if item.get(key) is not None}
             for item in data
             if isinstance(item, dict) and item.get("modelKey")
         ]
+
+    def list_models(self) -> list[str]:
+        return [str(item["modelKey"]) for item in self.list_model_details()]
 
     def list_runtimes(self) -> list[str]:
         """Return installed inference runtime descriptions reported by lms."""

@@ -1,17 +1,28 @@
 import logging
 import os
 import platform
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
+
+from app.core.config_migrations import CURRENT_CONFIG_VERSION, migrate_config
+from app.core.settings_schema import (
+    EDITABLE_SETTING_KEYS,
+    MASKED_SECRET,
+    SETTINGS_BY_KEY,
+    normalize_setting_value,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class Settings:
     # Immutable defaults
-    PROJECT_NAME: str = "Subtitle Translator"
+    PROJECT_NAME: str = "Video Translator"
+    UI_LANGUAGE: str = ""
+    CONFIG_VERSION: int = CURRENT_CONFIG_VERSION
 
     # Base directories
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
@@ -78,7 +89,8 @@ class Settings:
     SSE_KEEPALIVE_TIMEOUT: float = 30.0
 
     # TTS / Dubbing Configuration defaults
-    TTS_MODE: str = "kokoro"  # kokoro | edge | speaches (legacy "local" is accepted)
+    TTS_MODE: str = "kokoro"  # kokoro | qwen | cosyvoice | edge | speaches
+    QWEN_AUTO_CPU_FALLBACK: bool = True
     TTS_API_URL: str = "http://localhost:8000"
     TTS_API_KEY: str = ""
     TTS_MODEL: str = "speaches-ai/Kokoro-82M-v1.0-ONNX"
@@ -93,42 +105,11 @@ class Settings:
     # Config file path
     CONFIG_PATH: Path = BASE_DIR.parent / "config.yaml"
 
-    # UI fields exposed to the settings panel (no longer split into basic/advanced)
-    UI_FIELDS: tuple = (
-        "ASR_MODEL_PATH",
-        "ASR_API_URL",
-        "ASR_REMOTE_MODEL",
-        "ASR_CHUNK_LENGTH",
-        "DEVICE_PREFERENCE",
-        "COMPUTE_TYPE",
-        "LLM_API_BASE_URL",
-        "LLM_API_KEY",
-        "LLM_MODEL_NAME",
-        "LLM_TEMPERATURE",
-        "LLM_PROVIDER",
-        "LM_STUDIO_BASE_URL",
-        "LM_STUDIO_MODEL",
-        "LM_STUDIO_CLI_PATH",
-        "LM_STUDIO_PORT",
-        "LM_STUDIO_TTL_SECONDS",
-        "OLLAMA_BASE_URL",
-        "OLLAMA_MODEL",
-        "OLLAMA_KEEP_ALIVE",
-        "TRANSLATION_BATCH_SIZE",
-        "CHUNKING_THRESHOLD_MINUTES",
-        "FFMPEG_PATH",
-        "TTS_MODE",
-        "TTS_API_URL",
-        "TTS_API_KEY",
-        "TTS_MODEL",
-        "TTS_DEFAULT_VOICE",
-        "TTS_SPEED",
-        "DUB_SAMPLE_RATE",
-        "KOKORO_MODEL_PATH",
-        "KOKORO_VOICES_PATH",
-    )
+    # Compatibility alias. The typed registry is now the source of truth.
+    UI_FIELDS: tuple = EDITABLE_SETTING_KEYS
 
     def __init__(self):
+        self._unknown_config: Dict[str, Any] = {}
         self._load_from_file()
         # Ensure directories exist
         for d in (self.UPLOAD_DIR, self.TEMP_DIR, self.OUTPUT_DIR):
@@ -162,41 +143,53 @@ class Settings:
         return ""
 
     def _load_from_file(self):
-        """Overlay config.yaml values on top of hardcoded defaults."""
+        """Overlay a migrated config.yaml on top of hardcoded defaults."""
         if not self.CONFIG_PATH.exists():
             return
 
         try:
             with open(self.CONFIG_PATH, "r", encoding="utf-8") as f:
-                data: Dict[str, Any] = yaml.safe_load(f) or {}
+                raw: Dict[str, Any] = yaml.safe_load(f) or {}
+            if not isinstance(raw, dict):
+                raise ValueError("Configuration root must be a mapping.")
+            data = migrate_config(raw)
+            known_fields = set(self._known_config_data())
+            self.CONFIG_VERSION = int(data.pop("CONFIG_VERSION", CURRENT_CONFIG_VERSION))
 
             for key, value in data.items():
-                if hasattr(self, key):
-                    # Convert string paths to Path objects for known path fields
-                    if key in ("BASE_DIR", "UPLOAD_DIR", "TEMP_DIR", "OUTPUT_DIR", "FFMPEG_BIN_DIR", "CONFIG_PATH"):
-                        setattr(self, key, Path(value))
-                    # Convert numeric strings back to int/float for known fields
-                    elif key in ("LLM_TEMPERATURE", "LLM_TIMEOUT_SECONDS", "DEDUPLICATE_THRESHOLD_SECONDS", "SSE_KEEPALIVE_TIMEOUT", "TTS_SPEED"):
-                        setattr(self, key, float(value))
-                    elif key in ("LLM_MAX_RETRIES", "LLM_RETRY_BACKOFF_BASE", "TRANSLATION_BATCH_SIZE", "ASR_BEAM_SIZE",
-                                 "ASR_CHUNK_LENGTH", "CHUNKING_THRESHOLD_MINUTES", "CHUNK_OVERLAP_SECONDS", "AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS",
-                                 "ASS_PLAYRES_X", "ASS_PLAYRES_Y", "ASS_FONT_SIZE_ORIGINAL", "ASS_FONT_SIZE_TRANSLATED", "SSE_QUEUE_MAXSIZE", "DUB_SAMPLE_RATE",
-                                 "LM_STUDIO_PORT", "LM_STUDIO_TTL_SECONDS"):
-                        setattr(self, key, int(value))
-                    elif key == "VERIFY_SSL":
-                        setattr(self, key, bool(value))
-                    else:
-                        setattr(self, key, value)
-                else:
-                    logger.warning(f"Unknown config key '{key}' in {self.CONFIG_PATH}, ignoring.")
+                if key not in known_fields:
+                    self._unknown_config[key] = value
+                    logger.warning(f"Unknown config key '{key}' in {self.CONFIG_PATH}; preserving it unchanged.")
+                    continue
+                if key in SETTINGS_BY_KEY:
+                    definition = SETTINGS_BY_KEY[key]
+                    value = normalize_setting_value(definition, value)
+                    if definition.secret and value == MASKED_SECRET:
+                        logger.warning(
+                            "Discarding persisted mask placeholder for secret field '%s'.",
+                            key,
+                        )
+                        value = ""
+                    if definition.format == "url" and value:
+                        value = self._validate_url(key, str(value))
+                elif key in ("LLM_TEMPERATURE", "LLM_TIMEOUT_SECONDS", "DEDUPLICATE_THRESHOLD_SECONDS", "SSE_KEEPALIVE_TIMEOUT", "TTS_SPEED"):
+                    value = float(value)
+                elif key in ("LLM_MAX_RETRIES", "LLM_RETRY_BACKOFF_BASE", "TRANSLATION_BATCH_SIZE", "ASR_BEAM_SIZE",
+                             "ASR_CHUNK_LENGTH", "CHUNKING_THRESHOLD_MINUTES", "CHUNK_OVERLAP_SECONDS", "AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS",
+                             "ASS_PLAYRES_X", "ASS_PLAYRES_Y", "ASS_FONT_SIZE_ORIGINAL", "ASS_FONT_SIZE_TRANSLATED", "SSE_QUEUE_MAXSIZE", "DUB_SAMPLE_RATE",
+                             "LM_STUDIO_PORT", "LM_STUDIO_TTL_SECONDS"):
+                    value = int(value)
+                elif key == "VERIFY_SSL":
+                    value = bool(value)
+                setattr(self, key, value)
 
             logger.info(f"Loaded configuration from {self.CONFIG_PATH}")
         except Exception as e:
             logger.error(f"Failed to load config file {self.CONFIG_PATH}: {e}")
 
-    def save_to_file(self):
-        """Persist current settings to config.yaml."""
-        data = {
+    def _known_config_data(self) -> Dict[str, Any]:
+        return {
+            "UI_LANGUAGE": self.UI_LANGUAGE,
             # LLM
             "LLM_API_BASE_URL": self.LLM_API_BASE_URL,
             "LLM_API_KEY": self.LLM_API_KEY,
@@ -246,6 +239,7 @@ class Settings:
             "SSE_KEEPALIVE_TIMEOUT": self.SSE_KEEPALIVE_TIMEOUT,
             # TTS / Dubbing
             "TTS_MODE": self.TTS_MODE,
+            "QWEN_AUTO_CPU_FALLBACK": self.QWEN_AUTO_CPU_FALLBACK,
             "TTS_API_URL": self.TTS_API_URL,
             "TTS_API_KEY": self.TTS_API_KEY,
             "TTS_MODEL": self.TTS_MODEL,
@@ -257,13 +251,36 @@ class Settings:
             "KOKORO_VOICES_PATH": self.KOKORO_VOICES_PATH,
         }
 
+    def save_to_file(self):
+        """Persist settings atomically while preserving unknown extension keys."""
+        data: Dict[str, Any] = {"CONFIG_VERSION": CURRENT_CONFIG_VERSION}
+        data.update(self._unknown_config)
+        data.update(self._known_config_data())
+        config_dir = self.CONFIG_PATH.parent
+        config_dir.mkdir(parents=True, exist_ok=True)
+        temp_path: Optional[Path] = None
         try:
-            with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
+            fd, raw_temp_path = tempfile.mkstemp(
+                prefix=f".{self.CONFIG_PATH.name}.", suffix=".tmp", dir=str(config_dir)
+            )
+            temp_path = Path(raw_temp_path)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.CONFIG_PATH)
+            temp_path = None
+            self.CONFIG_VERSION = CURRENT_CONFIG_VERSION
             logger.info(f"Saved configuration to {self.CONFIG_PATH}")
         except Exception as e:
             logger.error(f"Failed to save config file {self.CONFIG_PATH}: {e}")
             raise
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Failed to remove temporary config file %s", temp_path)
 
     def _safe_path(self, path: Optional[str]) -> str:
         """Convert absolute path to relative path (relative to BASE_DIR) to avoid exposing directory structure."""
@@ -290,6 +307,7 @@ class Settings:
     def to_public_dict(self) -> Dict[str, Any]:
         """Return settings suitable for frontend display (API key masked, paths sanitized)."""
         return {
+            "UI_LANGUAGE": self.UI_LANGUAGE,
             # LLM
             "LLM_API_BASE_URL": self.LLM_API_BASE_URL,
             "LLM_API_KEY": "********" if self.LLM_API_KEY else "",
@@ -338,6 +356,7 @@ class Settings:
             "SSE_KEEPALIVE_TIMEOUT": self.SSE_KEEPALIVE_TIMEOUT,
             # TTS / Dubbing
             "TTS_MODE": self.TTS_MODE,
+            "QWEN_AUTO_CPU_FALLBACK": self.QWEN_AUTO_CPU_FALLBACK,
             "TTS_API_URL": self.TTS_API_URL,
             "TTS_API_KEY": "********" if self.TTS_API_KEY else "",
             "TTS_MODEL": self.TTS_MODEL,
@@ -362,49 +381,29 @@ class Settings:
         return value
 
     def update(self, updates: Dict[str, Any]):
-        """Apply validated updates and persist to disk."""
-        editable_fields = set(self.UI_FIELDS)
-        for key, value in list(updates.items()):
-            if key not in editable_fields:
+        """Validate a complete candidate update, then persist it transactionally."""
+        normalized: Dict[str, Any] = {}
+        for key, value in updates.items():
+            definition = SETTINGS_BY_KEY.get(key)
+            if definition is None:
                 logger.warning(f"Ignoring non-editable field '{key}'")
                 continue
-            # Numeric validation
-            if key in ("CHUNKING_THRESHOLD_MINUTES", "CHUNK_OVERLAP_SECONDS", "TRANSLATION_BATCH_SIZE",
-                       "LLM_MAX_RETRIES", "LLM_RETRY_BACKOFF_BASE", "LM_STUDIO_PORT",
-                       "LM_STUDIO_TTL_SECONDS"):
-                value = int(value)
-                if value < 1:
-                    raise ValueError(f"Field '{key}' must be >= 1.")
-            elif key == "LLM_TEMPERATURE":
-                value = float(value)
-                if not (0 <= value <= 2):
-                    raise ValueError(f"Field '{key}' must be between 0 and 2.")
-            elif key == "LLM_PROVIDER":
-                value = str(value).lower().strip()
-                if value not in ("lm_studio", "ollama", "openai_compatible"):
-                    raise ValueError("LLM_PROVIDER must be 'lm_studio', 'ollama', or 'openai_compatible'.")
-            elif key == "TTS_SPEED":
-                value = float(value)
-                if not (0.25 <= value <= 4.0):
-                    raise ValueError(f"Field '{key}' must be between 0.25 and 4.0.")
-            elif key == "DUB_SAMPLE_RATE":
-                value = int(value)
-                if not (8000 <= value <= 48000):
-                    raise ValueError(f"Field '{key}' must be between 8000 and 48000.")
-            elif key == "TTS_MODE":
-                value = str(value).lower().strip()
-                if value == "local":
-                    value = "kokoro"
-                if value not in ("speaches", "kokoro", "edge"):
-                    raise ValueError(f"Field '{key}' must be 'speaches', 'kokoro', or 'edge'.")
-            # URL validation for SSRF mitigation
-            if key in ("LLM_API_BASE_URL", "LM_STUDIO_BASE_URL", "OLLAMA_BASE_URL", "ASR_API_URL", "TTS_API_URL") and value:
+            value = normalize_setting_value(definition, value)
+            if definition.secret and value == MASKED_SECRET:
+                continue
+            if definition.format == "url" and value:
                 value = self._validate_url(key, str(value))
-            # Path fields: strip empty strings to None
-            if key in ("ASR_MODEL_PATH", "FFMPEG_PATH", "ASR_API_URL", "ASR_REMOTE_MODEL") and value == "":
-                value = None
-            setattr(self, key, value)
-        self.save_to_file()
+            normalized[key] = value
+
+        snapshot = {key: getattr(self, key) for key in normalized}
+        try:
+            for key, value in normalized.items():
+                setattr(self, key, value)
+            self.save_to_file()
+        except Exception:
+            for key, value in snapshot.items():
+                setattr(self, key, value)
+            raise
 
 
 settings = Settings()

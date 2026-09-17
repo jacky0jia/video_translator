@@ -1,12 +1,33 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { translations } from '../i18n/translations';
 
 const I18nContext = createContext(null);
+const validLanguage = value => value === 'en' || value === 'zh';
+const cacheLanguage = value => {
+  try { localStorage.setItem('app_lang', value); } catch { /* Browser storage can be disabled. */ }
+};
 
 export function I18nProvider({ children }) {
   const [lang, setLang] = useState(() => {
-    return localStorage.getItem('app_lang') || 'en';
+    try {
+      const cached = localStorage.getItem('app_lang');
+      return validLanguage(cached) ? cached : 'en';
+    } catch { return 'en'; }
   });
+  const userChanged = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/config').then(response => response.ok ? response.json() : null).then(data => {
+      const saved = data?.config?.UI_LANGUAGE;
+      // Older configurations retain their browser preference until Settings is saved.
+      if (active && !userChanged.current && data?.is_local && validLanguage(saved)) {
+        setLang(saved);
+        cacheLanguage(saved);
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const t = useCallback(
     (key) => translations[lang]?.[key] ?? key,
@@ -14,8 +35,10 @@ export function I18nProvider({ children }) {
   );
 
   const setLanguage = useCallback((next) => {
+    if (!validLanguage(next)) return;
+    userChanged.current = true;
     setLang(next);
-    localStorage.setItem('app_lang', next);
+    cacheLanguage(next);
   }, []);
 
   return (

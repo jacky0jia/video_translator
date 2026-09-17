@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
+import {
+  deriveTaskProcessingState, retryPlanForFailure, stageId, STAGE_MESSAGES,
+  standaloneTranscriptionCompletion, subtitleVisibility,
+} from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 
@@ -21,22 +25,6 @@ function voiceMatches(voice, target) {
   return actual === expected || actual.startsWith(expected);
 }
 
-function stageId(status) {
-  if (String(status).includes('transcrib')) return 'transcribe';
-  if (String(status).includes('translat')) return 'translate';
-  if (String(status).includes('dubb')) return 'dub';
-  if (String(status).includes('burn') || String(status).includes('render')) return 'render';
-  return '';
-}
-
-const STAGE_MESSAGES = {
-  pipeline_transcribing: 'Transcribing',
-  pipeline_translating: 'Translating',
-  pipeline_translated: 'Translation complete',
-  pipeline_dubbing: 'Creating dubbing',
-  burning: 'Rendering subtitles',
-};
-
 export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSource, showTarget }) {
   const showToast = useToast();
   const { t } = useI18n();
@@ -46,6 +34,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [subtitleContent, setSubtitleContent] = useState('translated');
   const [voices, setVoices] = useState([]);
   const [voice, setVoice] = useState('');
+  const [ttsMode, setTtsMode] = useState('');
+  const [onlineLanguages, setOnlineLanguages] = useState([]);
+  const [voiceError, setVoiceError] = useState('');
   const [speed, setSpeed] = useState(1);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -65,29 +56,71 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   );
 
   useEffect(() => {
-    fetch('/api/dubbing/voices')
+    let active = true;
+    let controller;
+    const loadVoices = () => {
+      controller?.abort();
+      controller = new AbortController();
+      setVoices([]);
+      setVoice('');
+      setTtsMode('');
+      return fetch('/api/dubbing/voices', { cache: 'no-store', signal: controller.signal })
       .then(res => res.ok ? res.json() : Promise.reject())
-      .then(data => setVoices(data.voices || []))
-      .catch(() => setVoices([]));
-  }, []);
+      .then(data => {
+        if (!active) return;
+        setVoices(data.voices || []);
+        setTtsMode(data.tts_mode || '');
+        setOnlineLanguages(data.online_languages || []);
+        setVoiceError(data.error || data.edge_error || '');
+      })
+      .catch(error => {
+        if (error?.name === 'AbortError') return;
+        if (!active) return;
+        setVoices([]);
+        setVoiceError(t('voiceCatalogUnavailable'));
+      });
+    };
+    loadVoices();
+    window.addEventListener('settings-changed', loadVoices);
+    return () => {
+      active = false;
+      controller?.abort();
+      window.removeEventListener('settings-changed', loadVoices);
+    };
+  }, [t]);
+
+  useEffect(() => {
+    if (ttsMode === 'qwen') setSpeed(1);
+  }, [ttsMode]);
 
   useEffect(() => {
     const preferred = matchingVoices.find(item => item.id === task?.dubbing_voice) || matchingVoices[0];
-    if (languageCode(targetLang) === 'ko') setVoice(preferred?.id || 'ko-KR-SunHiNeural');
+    if (languageCode(targetLang) === 'ko') setVoice(preferred?.id || (onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''));
     else setVoice(preferred?.id || '');
-  }, [matchingVoices, targetLang, task?.task_id, task?.dubbing_voice]);
+  }, [matchingVoices, onlineLanguages, targetLang, task?.task_id, task?.dubbing_voice]);
 
   useEffect(() => {
+    const restored = deriveTaskProcessingState(task, t);
     setRoute(task?.last_process_route || 'subtitles');
     setFormat(task?.last_subtitle_format || 'srt');
-    setProgress(0);
-    setCurrentStage('');
-    setMessage(t('readyToProcess'));
-    setStatus('ready');
-    setRunning(false);
+    setProgress(restored.progress);
+    setCurrentStage(restored.currentStage);
+    setMessage(restored.message);
+    setStatus(restored.status);
+    setRunning(restored.running);
     setLastFailedStage(task?.failed_stage || task?.interrupted_status || '');
     completionHandledRef.current = false;
   }, [task?.task_id, t]);
+
+  useEffect(() => {
+    const completion = standaloneTranscriptionCompletion({ status: task?.status }, t);
+    if (!completion) return;
+    setProgress(completion.progress);
+    setStatus(completion.status);
+    setCurrentStage(completion.currentStage);
+    setMessage(completion.message);
+    setRunning(completion.running);
+  }, [task?.status, t]);
 
   const refresh = useCallback(async () => {
     await onTaskRefresh?.(task.task_id);
@@ -118,12 +151,27 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     return data;
   }, [burn, format, route, subtitleContent, subtitleStyle, task]);
 
-  useTaskSSE(running ? task?.task_id : null, event => {
+  useTaskSSE(running && route === 'dubbing' ? task?.task_id : null, event => {
     const nextProgress = Number(event.progress_percent);
     if (Number.isFinite(nextProgress)) setProgress(nextProgress);
     const eventStage = event.pipeline_stage || event.status;
     setCurrentStage(stageId(eventStage));
     if (event.message) setMessage(STAGE_MESSAGES[eventStage] || event.message);
+    const transcriptionCompletion = standaloneTranscriptionCompletion(event, t);
+    if (transcriptionCompletion) {
+      setProgress(transcriptionCompletion.progress);
+      setStatus(transcriptionCompletion.status);
+      setCurrentStage(transcriptionCompletion.currentStage);
+      setMessage(transcriptionCompletion.message);
+      setRunning(transcriptionCompletion.running);
+      refresh().catch(() => {});
+      return;
+    }
+    // Translation artifacts are ready before synthesis starts, even if dubbing
+    // later fails. Refresh here as well as on terminal events.
+    if (route === 'dubbing' && ['pipeline_translated', 'pipeline_dubbing'].includes(event.status)) {
+      refresh().catch(() => {});
+    }
     if (route === 'dubbing' && event.pipeline_status === 'completed' && !completionHandledRef.current) {
       completionHandledRef.current = true;
       setProgress(100);
@@ -140,16 +188,19 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       setStatus('failed');
       setLastFailedStage(event.failed_stage || event.pipeline_stage || event.status);
       setMessage(event.message || 'Processing failed');
+      refresh().catch(() => {});
     }
     if (event.pipeline_status === 'cancelled' || event.status === 'cancelled') {
       setRunning(false);
       setStatus('cancelled');
       setMessage('Processing cancelled');
+      refresh().catch(() => {});
     }
   });
 
   const ensureTranslation = async (force = false) => {
-    if (!force && task.translations?.[targetLang]) return;
+    const profile = task.translation_profiles?.[targetLang];
+    if (!force && task.translations?.[targetLang] && profile !== 'dubbing') return;
     setCurrentStage('translate');
     setProgress(value => Math.max(value, 30));
     setMessage(`Translating into ${targetLang}`);
@@ -186,13 +237,13 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       setCurrentStage('render');
       setProgress(85);
       setMessage('Burning subtitles into video');
+      const visibility = subtitleVisibility(subtitleContent, showSource, showTarget);
       const response = await fetch('/api/burn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           task_id: task.task_id,
-          show_source: subtitleContent === 'bilingual' && showSource,
-          show_target: showTarget,
+          ...visibility,
           style: subtitleStyle,
           target_lang: targetLang,
         }),
@@ -205,6 +256,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
 
   const startDubbing = async ({ forceTranslate = false, forceDub = false } = {}) => {
     if (!voice) throw new Error(`${t('noVoiceAvailable')}: ${targetLang}`);
+    const visibility = subtitleVisibility(subtitleContent, showSource, showTarget, burn);
     const response = await fetch('/api/pipeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -215,8 +267,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
         speed,
         subtitle_format: format,
         burn_subtitles: burn,
-        show_source: burn && subtitleContent === 'bilingual' && showSource,
-        show_target: burn && showTarget,
+        ...visibility,
         subtitle_style: subtitleStyle || {},
         force_translate: forceTranslate,
         force_dub: forceDub,
@@ -258,9 +309,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
 
   const retryFailedStage = () => {
     const failedStage = String(lastFailedStage || task.failed_stage || task.interrupted_status || task.status || '');
-    if (failedStage.includes('translat')) return run({ forceTranslate: true, forceDub: route === 'dubbing', resume: true });
-    if (failedStage.includes('dubb')) return run({ forceDub: true, resume: true });
-    return run({ resume: true });
+    const failureMessage = message || task.message || task.dubbing_error || '';
+    return run(retryPlanForFailure(failedStage, failureMessage, route));
   };
 
   const cancel = async () => {
@@ -273,6 +323,6 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     burn, cancel, currentStage, format, matchingVoices, message, progress,
     requiredStages, retryFailedStage, route, run, running, setBurn, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
-    subtitleContent, targetLang, voice,
+    subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,
   };
 }

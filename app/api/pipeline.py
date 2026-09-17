@@ -3,7 +3,10 @@ from pydantic import BaseModel, Field
 
 from app.core.history import history_manager
 from app.services.pipeline_service import pipeline_service
-from app.services.dubbing_service import _is_kokoro_mode
+from app.core.config import settings
+from app.services.tts.registry import is_korean_language, resolve_tts_route
+from app.services.tts.voice_selection import resolve_available_voice
+from app.services.dubbing_service import dubbing_service
 
 router = APIRouter()
 
@@ -30,12 +33,25 @@ async def start_pipeline(request: PipelineRequest):
         raise HTTPException(status_code=400, detail="speed must be in [0.25, 4.0]")
     if request.subtitle_format.lower() not in {"srt", "vtt", "ass"}:
         raise HTTPException(status_code=400, detail="subtitle_format must be srt, vtt, or ass")
-    is_korean = request.target_lang.strip().lower() in {"ko", "ko-kr", "korean", "韩语", "한국어"}
-    if not is_korean and _is_kokoro_mode() and not 0.5 <= request.speed <= 2.0:
+    route = resolve_tts_route(settings.TTS_MODE, request.target_lang)
+    is_korean = is_korean_language(request.target_lang)
+    if route.provider_id == "kokoro" and is_korean:
+        raise HTTPException(
+            status_code=400,
+            detail="Kokoro 不支持韩语配音；请选择中文、英文或日文，或切换到 Edge/Qwen。",
+        )
+    if route.provider_id == "kokoro" and not 0.5 <= request.speed <= 2.0:
         raise HTTPException(status_code=400, detail="Kokoro speed must be in [0.5, 2.0]")
+    if route.provider_id in {"cosyvoice", "qwen"} and request.speed != 1.0:
+        raise HTTPException(status_code=400, detail="Local cloned-voice generation speed must be 1.0")
     voice = request.voice
-    if is_korean and not voice.lower().startswith("ko-kr-"):
-        voice = "ko-KR-SunHiNeural"
+    if route.provider_id in {"kokoro", "cosyvoice", "qwen", "edge"}:
+        try:
+            voice = await resolve_available_voice(
+                dubbing_service.tts_registry, route, voice, request.target_lang
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         history_manager.update_task(
             request.task_id,

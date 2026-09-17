@@ -1,5 +1,6 @@
 import json
 import logging
+import unicodedata
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,8 @@ from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 
 logger = logging.getLogger(__name__)
+
+_TRANSLATION_FAILURE_MARKERS = {"Translation error", "[Translation failed]"}
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,36 @@ class TranslationService:
                 },
             },
         }
+
+    @staticmethod
+    def _auth_headers(api_key: str) -> dict[str, str]:
+        key = str(api_key or "").strip()
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
+    @staticmethod
+    def _parse_json_object(content: object) -> dict:
+        """Parse structured output even when a provider adds Markdown or prose."""
+        if isinstance(content, dict):
+            return content
+        text = str(content or "").strip()
+        candidates = [text]
+        if text.startswith("```") and text.endswith("```"):
+            fenced = text[3:-3].strip()
+            if fenced.lower().startswith("json"):
+                fenced = fenced[4:].lstrip()
+            candidates.append(fenced)
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace >= 0 and last_brace > first_brace:
+            candidates.append(text[first_brace : last_brace + 1])
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        raise ValueError("Translation provider did not return a JSON object")
 
     @staticmethod
     def _current_config() -> TranslationProviderConfig:
@@ -145,7 +178,7 @@ class TranslationService:
                         request_body["reasoning_effort"] = "none"
                     response = await client.post(
                         provider_config.api_url,
-                        headers={"Authorization": f"Bearer {provider_config.api_key}"},
+                        headers=self._auth_headers(provider_config.api_key),
                         json=request_body,
                     )
                     response.raise_for_status()
@@ -153,7 +186,7 @@ class TranslationService:
 
                     # Parse the content
                     content = data["choices"][0]["message"]["content"]
-                    result = json.loads(content)
+                    result = self._parse_json_object(content)
 
                     # The LLM should return a list of translations under a key like "translations"
                     translations = result.get("translations", [])
@@ -205,20 +238,21 @@ class TranslationService:
             budgets = [self._dubbing_character_budget(seg, target_lang) for seg in current_batch]
             dubbing_requirements = (
                 "4. These translations will be spoken within the original time slots. "
-                "Use concise, natural spoken language; preserve the core meaning and remove redundancy.\n"
-                f"5. Hard maximum character counts for translations 0..{len(budgets) - 1}: {budgets}. "
-                "Count all visible characters including punctuation. Never exceed these limits.\n"
+                "Use concise, natural spoken language and remove verbal redundancy, while preserving every "
+                "fact, name, number, qualification, negation, and causal relationship from the source.\n"
+                f"5. Preferred character targets for translations 0..{len(budgets) - 1}: {budgets}. "
+                "These are pacing targets, not permission to omit meaning. If a target cannot be met without "
+                "changing or weakening the meaning, preserve the meaning and exceed the target.\n"
             )
             if str(target_lang).strip().lower() in {"japanese", "ja", "jp"}:
                 dubbing_requirements += (
-                    f"Japanese requirement: 各訳文は必ず順番に {budgets} 文字以内にしてください。"
-                    "収まらない場合は、細部を省いて核心だけを自然な話し言葉で要約してください。\n"
+                    f"Japanese pacing targets: {budgets}. 自然で簡潔な話し言葉にしてください。"
+                    "ただし、意味・固有名詞・数値・否定・条件・因果関係を省略しないでください。\n"
                 )
             if strict_length:
                 dubbing_requirements += (
-                    "6. A previous translation was too long for dubbing. Compression is mandatory; "
-                    "rewrite more briefly instead of repeating the same wording. It is better to omit "
-                    "secondary details than to exceed the character limit.\n"
+                    "6. A previous result missed its pacing target. Rephrase it more compactly without "
+                    "summarizing away information. Preserve meaning rather than forcing the character target.\n"
                 )
 
         prompt = (
@@ -243,24 +277,50 @@ class TranslationService:
         normalized = str(target_lang or "").strip().lower()
         chars_per_second = {
             "japanese": 6.0, "ja": 6.0, "jp": 6.0,
-            "korean": 7.0, "ko": 7.0,
+            "korean": 5.0, "ko": 5.0,
             "chinese": 5.0, "zh": 5.0,
             "english": 14.0, "en": 14.0,
         }.get(normalized, 8.0)
         duration = max(float(segment.end) - float(segment.start), 0.5)
         return max(int(duration * chars_per_second), 4)
 
+    @staticmethod
+    def _dubbing_spoken_length(text: str, target_lang: str) -> int:
+        """Estimate spoken units without charging CJK punctuation as syllables."""
+        normalized = str(target_lang or "").strip().lower()
+        if normalized not in {
+            "japanese", "ja", "jp", "korean", "ko", "chinese", "zh",
+        }:
+            return len(str(text or "").strip())
+        return sum(
+            1
+            for character in str(text or "")
+            if not unicodedata.category(character).startswith(("P", "Z"))
+        )
+
+    @staticmethod
+    def _translation_failed(value: object) -> bool:
+        text = str(value or "").strip()
+        return not text or text in _TRANSLATION_FAILURE_MARKERS
+
     async def _compress_for_dubbing(
-        self, translation: str, target_lang: str, max_characters: int
+        self,
+        translation: str,
+        target_lang: str,
+        max_characters: int,
+        source_text: str = "",
     ) -> str:
-        """Rewrite one completed translation to a strict spoken-length budget."""
+        """Rephrase a translation toward a pacing target without dropping meaning."""
         provider_config = self._task_config.get() or self._current_config()
         prompt = (
             f"Rewrite the text below as concise, natural spoken {target_lang}. "
-            f"The result MUST contain at most {max_characters} visible characters including punctuation. "
-            "Preserve the core meaning, but omit secondary details when necessary. Do not cut a word or "
-            "sentence mechanically. Return JSON only: {\"translation\": \"...\"}.\n\n"
-            f"Text: {translation}"
+            f"Aim for at most {max_characters} visible characters including punctuation. "
+            "Preserve every fact, name, number, qualification, negation, and causal relationship. "
+            "Do not summarize, generalize, introduce ambiguity, or omit details. If the target cannot be met "
+            "without changing meaning, return the shortest faithful wording even if it exceeds the target. "
+            "Return JSON only: {\"translation\": \"...\"}.\n\n"
+            f"Source meaning reference: {source_text or '(unavailable)'}\n"
+            f"Translation to rephrase: {translation}"
         )
         if str(target_lang).strip().lower() in {"japanese", "ja", "jp"}:
             prompt += (
@@ -271,29 +331,34 @@ class TranslationService:
             async with self._http_client_factory(
                 timeout=provider_config.timeout_seconds, verify=settings.VERIFY_SSL
             ) as client:
+                request_body = {
+                    "model": provider_config.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You rewrite dubbing scripts to strict character limits and return strict JSON.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "response_format": self._response_format(
+                        provider_config.provider,
+                        key="translation",
+                    ),
+                    "max_tokens": 256,
+                    "temperature": 0,
+                }
+                if provider_config.provider == "lm_studio":
+                    request_body["reasoning_effort"] = "none"
                 response = await client.post(
                     provider_config.api_url,
-                    headers={"Authorization": f"Bearer {provider_config.api_key}"},
-                    json={
-                        "model": provider_config.model,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "You rewrite dubbing scripts to strict character limits and return strict JSON.",
-                            },
-                            {"role": "user", "content": prompt},
-                        ],
-                        "response_format": self._response_format(
-                            provider_config.provider,
-                            key="translation",
-                        ),
-                        "max_tokens": 256,
-                        "temperature": 0,
-                    },
+                    headers=self._auth_headers(provider_config.api_key),
+                    json=request_body,
                 )
                 response.raise_for_status()
                 content = response.json()["choices"][0]["message"]["content"]
-                candidate = str(json.loads(content).get("translation", "")).strip()
+                candidate = str(
+                    self._parse_json_object(content).get("translation", "")
+                ).strip()
                 return candidate or translation
         except Exception as exc:
             logger.warning("Dubbing translation compression failed: %s", exc)
@@ -369,26 +434,67 @@ class TranslationService:
                                 )
                                 batch_translations.append("[Translation failed]")
 
+                    # Structured output can contain the correct number of items
+                    # while one entry is empty. Recover only those rows so a
+                    # transient generation miss does not discard a valid batch.
+                    for local_index, translation in enumerate(batch_translations):
+                        if not self._translation_failed(translation):
+                            continue
+                        logger.warning(
+                            "Translation for segment %s is empty or invalid; retrying individually",
+                            i + local_index + 1,
+                        )
+                        for _ in range(2):
+                            single = await self.translate_batch(
+                                [current_batch[local_index]], [], [], target_lang,
+                                **(
+                                    {"fit_to_duration": True, "strict_length": True}
+                                    if fit_to_duration else {}
+                                ),
+                            )
+                            if len(single) == 1 and not self._translation_failed(single[0]):
+                                batch_translations[local_index] = single[0]
+                                break
+
                     if fit_to_duration:
                         for local_index, (segment, translation) in enumerate(
                             zip(current_batch, batch_translations)
                         ):
                             budget = self._dubbing_character_budget(segment, target_lang)
-                            if len(translation) <= budget:
+                            spoken_length = self._dubbing_spoken_length(
+                                translation, target_lang
+                            )
+                            if spoken_length <= budget:
                                 continue
                             logger.info(
                                 "Dubbing translation exceeds slot budget (%s > %s); requesting compression",
-                                len(translation), budget,
+                                spoken_length, budget,
                             )
                             shortest = translation
+                            shortest_length = spoken_length
                             for _ in range(2):
                                 compressed = await self._compress_for_dubbing(
-                                    shortest, target_lang, budget,
+                                    translation,
+                                    target_lang,
+                                    budget,
+                                    source_text=segment.text,
                                 )
-                                if len(compressed) < len(shortest):
+                                compressed_length = self._dubbing_spoken_length(
+                                    compressed, target_lang
+                                )
+                                if compressed_length < shortest_length:
                                     shortest = compressed
-                                if len(shortest) <= budget:
+                                    shortest_length = compressed_length
+                                if shortest_length <= budget:
                                     break
+                            if shortest_length > budget:
+                                logger.warning(
+                                    "Segment %s remains above its estimated spoken-time budget "
+                                    "(%s > %s); deferring the final fit decision to measured TTS audio",
+                                    i + local_index + 1,
+                                    shortest_length,
+                                    budget,
+                                )
                             batch_translations[local_index] = shortest
 
                     translated_texts.extend(batch_translations)

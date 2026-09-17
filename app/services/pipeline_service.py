@@ -35,6 +35,17 @@ class PipelineService:
         emit_event(task_id, data)
 
     @staticmethod
+    def _error_message(exc: Exception, task: dict | None = None) -> str:
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, str) and detail.strip():
+            return detail
+        message = str(exc).strip()
+        if message:
+            return message
+        persisted = str((task or {}).get("message") or "").strip()
+        return persisted or exc.__class__.__name__
+
+    @staticmethod
     def _artifact_exists(value: str | None) -> bool:
         if not value:
             return False
@@ -156,7 +167,13 @@ class PipelineService:
 
             task = history_manager.get_task(task_id) or {}
             translation_path = (task.get("translations") or {}).get(target_lang)
-            if force_translate or not translation_path or not Path(translation_path).exists():
+            translation_profile = (task.get("translation_profiles") or {}).get(target_lang)
+            if (
+                force_translate
+                or not translation_path
+                or not Path(translation_path).exists()
+                or translation_profile != "dubbing"
+            ):
                 self._set_stage(task_id, "pipeline_translating", "正在翻译...", 40)
                 stage = self._translate_stage or self._default_translate
                 await stage(task_id, target_lang)
@@ -221,9 +238,11 @@ class PipelineService:
             raise
         except Exception as exc:
             logger.exception("Pipeline failed for task %s", task_id)
+            task = history_manager.get_task(task_id) or {}
             data = {
                 "status": "failed", "pipeline_status": "failed",
-                "message": str(exc), "failed_stage": (history_manager.get_task(task_id) or {}).get("pipeline_stage"),
+                "message": self._error_message(exc, task),
+                "failed_stage": task.get("pipeline_stage"),
             }
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)

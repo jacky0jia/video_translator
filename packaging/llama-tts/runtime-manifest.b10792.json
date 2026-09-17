@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "runtime_version": "b10792-c5a5535e6",
+  "executable": "llama-tts.exe",
+  "files": {
+    "cublas64_12.dll": "e40202fe4223c1cd2d2dce7beec59e1ed61c7801bd827309183be9b50e358f4c",
+    "cublasLt64_12.dll": "2a896460bef60ed57ef32b0875812f355a6984e671d638bb632f5e8c1d7a831f",
+    "cudart64_12.dll": "d28e42265da7462162a54da6b7a99ea4fa2caf8139d862bb500db875d0b32dfc",
+    "ggml-base.dll": "3088e3ca9cf1efbd631f78e9f35368561202e3cce77d5831f91e4c10fdcf633e",
+    "ggml-cpu-alderlake.dll": "071602db0783ad24f7e2c9fe6e3d48cbf653a2667f96e3b82acfa5a9010ee61a",
+    "ggml-cpu-cannonlake.dll": "75a40b88582954fa75f441659e9e1d32507de4dd55c29ab476d18341b875840e",
+    "ggml-cpu-cascadelake.dll": "c2ee0c9c3cd0a79f8cd754bb10281fcca2f527df696a72b11163ca5efb771b75",
+    "ggml-cpu-cooperlake.dll": "4152d036a6885d3e0971e5a20ee95399776478ea3a7afc420eb9d1d3a061bbfb",
+    "ggml-cpu-haswell.dll": "6e01fe887446bb949b928a005309c4e767a58838da76e5515270a99871d92503",
+    "ggml-cpu-icelake.dll": "c22560b7985a067a3e1abcbd57a086be83d4507810177d3d1555cc069c2a36e1",
+    "ggml-cpu-ivybridge.dll": "6bbcfc74fa35fcebae5c84dc04e2b4c5273053ade92af1b309455d8a874262ff",
+    "ggml-cpu-piledriver.dll": "b3fb606156330f7c9be69033012fd4367ba5629ad92af4167f323f6c03c6f981",
+    "ggml-cpu-sandybridge.dll": "3ad0abe84c1c95f4abc0f5a0543bf07953cbbc1183e6ac276a1701080bb649cb",
+    "ggml-cpu-sapphirerapids.dll": "e56089245a6d11ac387e692cdcd3439d78e52189b6368c8bb5686f10f47f6b15",
+    "ggml-cpu-skylakex.dll": "b8c05b72ff04e72de57059699e1d3aa7e36d69e9183773faf0fbb861b4a870da",
+    "ggml-cpu-sse42.dll": "040d21b3a2b5ad07ad632b5f20a74e4c5c4ec53cc11757a1118c451945a49d15",
+    "ggml-cpu-x64.dll": "8211b6945355bc4b8b85c20a07772e0f1a3bd9013e145f344bf7ca8f87d79b62",
+    "ggml-cpu-zen4.dll": "76cb969837d7efaef8c703feec12be195d26e10b2537c62f2d4ff49e7f5c399a",
+    "ggml-cuda.dll": "25c0c8194c89b1e19a2a46bac19741d5c7561c28ba88cfd9da063492cca34637",
+    "ggml.dll": "0387eaac7c15f1cb6c08551e7d5494310420b91b9dbe41a80b606883852d1862",
+    "libomp.dll": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c",
+    "llama-common.dll": "7356c0beb955d07541ac60039fc9ef12d0010b4a79e86d33a6c14576a314435c",
+    "llama-tts.exe": "c44481974b4b2d47aab37a68239f7e648bc801368cd45ed75574571c3f56491e",
+    "llama.dll": "52e463fbfae462a94e24247d232a6c2b46091151f765115ed020a618ac4acc5d",
+    "mtmd.dll": "3761044fd3941f048ecfa5ce1b3b1afcbbe3fdf7230e0623afcc94732de2755c"
+  }
+}

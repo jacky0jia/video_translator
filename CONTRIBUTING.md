@@ -1,6 +1,6 @@
 # Contributing
 
-感谢你帮助改进 Subtitle Translator。
+感谢你帮助改进 Video Translator。
 
 ## 开始之前
 

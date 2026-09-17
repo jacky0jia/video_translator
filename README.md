@@ -1,62 +1,79 @@
 <p align="center">
-  <img src="app/frontend/public/subtitle-companion.svg" alt="Subtitle Companion" width="96" />
+  <img src="app/frontend/public/subtitle-companion.svg" alt="Video Translator" width="96" />
 </p>
 
-# Subtitle Translator
+# Video Translator
 
-本地优先的视频字幕翻译与多语言配音工具。它将视频转写、LLM 翻译、字幕导出、硬字幕渲染和配音视频生成整合到一个浏览器界面中。
+[简体中文](README.zh-CN.md)
 
-> 当前状态：`v0.1.0-alpha.0` 公开测试版。主路线已经通过 Windows 干净环境、自动化测试和 15 分钟真实视频验证，但目前仍需要用户自行准备 Python、Node.js、FFmpeg、LM Studio 和模型，不是免安装软件。
+A local-first application for video transcription, subtitle translation, multilingual dubbing, subtitle rendering, and video export from one browser interface.
 
-## 功能
+> Current status: `v0.1.0-alpha.0`. The primary Windows workflow has passed clean-environment checks, automated tests, and a 15-minute real-video validation. The source setup below requires Python, Node.js, FFmpeg, LM Studio and models. A separately prepared Windows public core includes its own Python and built frontend; follow its bundled setup guide when using that package.
 
-- 使用 faster-whisper 本地转写，长视频自动分块
-- 使用 LM Studio 本地模型翻译，兼容 Ollama 和 OpenAI-compatible API
-- 导出 SRT、VTT、ASS，支持双语字幕和样式调整
-- 将字幕烧录到视频
-- 使用本地 Kokoro 生成中文、英语、日语等语言配音
-- 韩语自动使用 Microsoft Edge 在线 TTS
-- 输出配音 WAV 和合成 MP4
-- SSE 实时进度、取消、失败阶段重试和任务恢复
-- 单 GPU FIFO 调度，在 Whisper、LM Studio 和配音阶段之间释放资源
-- 英文/简体中文界面，桌面和移动端布局
+## Portable Windows core
 
-## 已验证环境
+If you received a public core package, start with its English `README.md` or `README-PORTABLE.md`. Double-click `start-portable.bat` to start the application and `install-upstream.bat` for the dependency setup menu. You do not need to install Python or Node.js separately for this package.
+
+FFmpeg, Kokoro models/voices, espeakng-loader and Qwen models/runtime are installed directly from pinned upstream sources. The menu displays upstream terms, download progress and SHA-256 checks. Qwen installation continues in Settings with the download paths filled automatically. Use menu 5 to check installed components. Translation still requires a separate LM Studio installation.
+
+See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English is the primary language for setup scripts, README files and release instructions; `.zh-CN.md` files are optional translations. Shipped third-party licenses and attribution retain their upstream text. A directory augmented with downloaded dependencies is not the original public core and must not reuse its distribution readiness claim.
+
+## Features
+
+- Local transcription with faster-whisper and automatic long-video chunking
+- Local LLM translation through LM Studio, with optional Ollama and OpenAI-compatible endpoints
+- SRT, VTT, and ASS export with translated, bilingual, or original subtitles
+- Styled hard-subtitle rendering
+- Local Kokoro dubbing for supported languages
+- Optional Microsoft Edge online TTS for Chinese, English, Japanese, and Korean
+- Private local Qwen3-TTS 1.7B Base runtime with built-in voices
+- Dubbed WAV and muxed MP4 output
+- Live SSE progress, cancellation, failed-stage retry, and task recovery
+- Single-GPU FIFO orchestration with model release between Whisper, LM Studio, and dubbing stages
+- English and Simplified Chinese interfaces with desktop and mobile layouts
+
+## Editions
+
+This repository contains the open-source **Standard** edition. Standard includes the complete base transcription, translation, subtitle, dubbing, and export workflow.
+
+A separate **Supporter Edition** is planned for experimental voice cloning, voice design, reusable character voices, and installable visual themes. Its private implementation and builds will not be stored in this public repository. No Supporter Edition download is available yet.
+
+## Verified environment
 
 - Windows 10/11
 - Python 3.11
 - Node.js 20
 - FFmpeg
-- NVIDIA GPU 推荐；CPU 模式可以运行，但转写和生成速度会明显降低
-- LM Studio 0.4 系列、GGUF llama.cpp Runtime 和本地模型
+- NVIDIA GPU recommended; CPU mode works but transcription and generation are much slower
+- LM Studio 0.4 series, a GGUF llama.cpp Runtime, and a local instruction model
 
-Linux、macOS、AMD GPU、Intel GPU 和 Docker 尚未作为正式发布路径验证，欢迎测试和提交反馈。
+Linux, macOS, AMD GPU, Intel GPU, and Docker are not accepted release paths yet. Testing and feedback are welcome, but these platforms are not currently supported.
 
-## 安装
+## Installation
 
-### 1. 获取源码
+### 1. Get the source
 
 ```powershell
-git clone https://github.com/<YOUR_ACCOUNT>/subtitle-translator.git
-cd subtitle-translator
+git clone https://github.com/jacky0jia/video_translator.git
+cd video_translator
 ```
 
-也可以从 GitHub 下载 Source code ZIP 并解压。
+You can also download and extract the source ZIP from GitHub.
 
-### 2. 创建 Python 环境
+### 2. Create the Python environment
 
-推荐使用 Miniconda：
+Miniconda is recommended:
 
 ```powershell
-conda create -n subtitle-translator python=3.11 -y
-conda activate subtitle-translator
+conda create -n video-translator python=3.11 -y
+conda activate video-translator
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Windows 会安装预编译的 `pyopenjtalk-plus`，不需要 Visual Studio/NMake 编译日语 G2P。
+On Windows, the prebuilt `pyopenjtalk-plus` package is used so Japanese G2P does not require Visual Studio or NMake.
 
-### 3. 构建前端
+### 3. Build the frontend
 
 ```powershell
 cd app/frontend
@@ -65,27 +82,27 @@ npm run build
 cd ../..
 ```
 
-### 4. 安装 FFmpeg
+### 4. Install FFmpeg
 
-确保下面的命令可以运行：
+Make sure both commands are available:
 
 ```powershell
 ffmpeg -version
 ffprobe -version
 ```
 
-如果不想加入 PATH，可启动应用后在 Settings 中填写 `FFMPEG_PATH`。
+If FFmpeg is not on `PATH`, set `FFMPEG_PATH` from the application settings.
 
-### 5. 准备 LM Studio
+### 5. Prepare LM Studio
 
-1. 安装并至少启动一次 [LM Studio](https://lmstudio.ai/)。
-2. 确认 CLI 可用：
+1. Install and launch [LM Studio](https://lmstudio.ai/) at least once.
+2. Confirm that its CLI is available:
 
    ```powershell
    lms --help
    ```
 
-3. 查看或安装 GGUF llama.cpp Runtime：
+3. Inspect or install a GGUF llama.cpp Runtime:
 
    ```powershell
    lms runtime ls
@@ -93,120 +110,133 @@ ffprobe -version
    lms runtime select
    ```
 
-4. 下载一个适合显存/内存容量的指令模型：
+4. Download an instruction model that fits your GPU memory or system RAM:
 
    ```powershell
    lms get --gguf
    lms ls --llm
    ```
 
-应用默认连接 `http://127.0.0.1:1234/v1`，会通过 `lms` 启动本地服务、加载模型，并在翻译结束后卸载。可以在 Settings → Services & diagnostics 中选择模型。
+Video Translator connects to `http://127.0.0.1:1234/v1` by default. It can start the local LM Studio server through `lms`, load the selected model, and unload it after translation. Select the model under **Settings → Services & diagnostics**.
 
-更多命令见 [LM Studio CLI 文档](https://lmstudio.ai/docs/cli) 和 [Runtime 文档](https://lmstudio.ai/docs/cli/runtime/runtime)。
+See the [LM Studio CLI documentation](https://lmstudio.ai/docs/cli) and [Runtime documentation](https://lmstudio.ai/docs/cli/runtime/runtime) for details.
 
-## 启动
+### Qwen3-TTS status
 
-确保 Conda 环境已经激活，然后运行：
+The local Qwen route targets only `Qwen3-TTS-12Hz-1.7B-Base-GGUF`. LM Studio may provide the downloaded GGUF files, while an application-private, hash-pinned `llama-tts` worker performs synthesis. Eight application-owned, public-domain LibriVox reference samples are presented as fixed built-in voices; Standard does not expose sample paths, uploads, replacement, or managed voice cloning.
+
+Qwen dubbing is available when the reviewed private `llama-tts` runtime bundle is configured. It does not depend on an LM Studio speech API and does not require Python, Torch, or the official `qwen-tts` Python package. Qwen mode keeps all ten supported languages, including Korean, on the local worker.
+
+## Start the application
+
+Activate the Conda environment, then run:
 
 ```powershell
 .\start.bat
 ```
 
-浏览器访问 <http://127.0.0.1:8769/>。
+Open <http://127.0.0.1:8769/> in a browser.
 
-如果端口已被占用：
+To use another port:
 
 ```powershell
 $env:APP_PORT = "9000"
 .\start.bat
 ```
 
-## 首次使用
+## First run
 
-1. 打开 Settings → Services & diagnostics。
-2. 确认 LLM provider 为 `lm_studio`，选择已经下载的模型。
-3. 保持 `ASR_MODEL_PATH` 为空时，faster-whisper 会根据 `ASR_MODEL_SIZE` 下载模型；默认是 `base`。
-4. 保持 Kokoro 路径为空时，第一次配音会下载模型到 `models/kokoro/`。
-5. 上传视频，选择目标语言，等待转写完成。
-6. 在 Process 中选择 Subtitles 或 Dubbing，然后从 Export 下载产物。
+1. Open **Settings → Services & diagnostics**.
+2. Keep `lm_studio` as the LLM provider and select a downloaded model.
+3. If `ASR_MODEL_PATH` is empty, faster-whisper downloads the selected `ASR_MODEL_SIZE`; the default is `base`.
+4. If the Kokoro paths are empty, the first dubbing task downloads the model into `models/kokoro/`.
+5. Upload a video and select a target language.
+6. After transcription, choose **Subtitles** or **Dubbing** under Process, then download the artifacts from Export.
 
-首次下载 Whisper、Kokoro 或 LM Studio 模型需要联网，并需要足够的磁盘空间。
+The first Whisper, Kokoro, or LM Studio model download requires internet access and sufficient disk space.
 
-## 配置
+## Configuration
 
-默认配置可以直接启动。需要覆盖配置时：
+The defaults can start the application. To override them:
 
 ```powershell
 Copy-Item config.example.yaml config.yaml
 ```
 
-`config.yaml` 已加入 `.gitignore`，因为它可能包含 API Key 和本机路径。也可以在应用设置界面修改配置。
+`config.yaml` is ignored by Git because it may contain API keys and machine-specific paths. Settings can also be edited in the application.
 
-常用字段：
+The Settings dialog is generated from the backend settings schema. Basic fields are shown first; use **Show advanced settings** for runtime, chunking, sampling, and local model-path controls. Switching providers only changes which fields are visible—it does not erase the hidden provider configuration. API keys remain masked unless explicitly cleared.
 
-- `LLM_PROVIDER`: `lm_studio`、`ollama` 或 `openai_compatible`
-- `LM_STUDIO_MODEL`、`LM_STUDIO_CLI_PATH`、`LM_STUDIO_TTL_SECONDS`
-- `ASR_MODEL_SIZE`、`ASR_MODEL_PATH`、`ASR_API_URL`
-- `DEVICE_PREFERENCE`: `auto`、`gpu` 或 `cpu`
-- `COMPUTE_TYPE`: `auto`、`float16` 或 `int8`
-- `TTS_MODE`: `kokoro`、`edge` 或 `speaches`
-- `KOKORO_MODEL_PATH`、`KOKORO_VOICES_PATH`
+Common fields:
+
+- `LLM_PROVIDER`: `lm_studio`, `ollama`, or `openai_compatible`
+- `LM_STUDIO_MODEL`, `LM_STUDIO_CLI_PATH`, `LM_STUDIO_TTL_SECONDS`
+- `ASR_MODEL_SIZE`, `ASR_MODEL_PATH`, `ASR_API_URL`
+- `DEVICE_PREFERENCE`: `auto`, `gpu`, or `cpu`
+- `COMPUTE_TYPE`: `auto`, `float16`, or `int8`
+- `TTS_MODE`: `kokoro`, `edge`, or `speaches`
+- `DUB_SAMPLE_RATE`: normalized mono PCM output rate (default `22050`)
+- `KOKORO_MODEL_PATH`, `KOKORO_VOICES_PATH`
 - `FFMPEG_PATH`
 
-完整示例见 [`config.example.yaml`](config.example.yaml)。
+See [`config.example.yaml`](config.example.yaml) for a complete example.
 
-## 本地处理与联网说明
+## Local processing and network use
 
-| 功能 | 默认行为 |
+| Feature | Default behavior |
 | --- | --- |
-| Whisper 转写 | 模型下载完成后在本机运行 |
-| LM Studio 翻译 | 在本机 LM Studio 运行 |
-| Kokoro 配音 | 模型下载完成后在本机运行 |
-| 韩语 Edge TTS | 文本会发送到 Microsoft 在线语音服务 |
-| Speaches / OpenAI-compatible | 数据发送到用户配置的服务地址 |
+| Whisper transcription | Runs locally after the model is downloaded |
+| LM Studio translation | Runs in the user's local LM Studio instance |
+| Qwen3-TTS dubbing | Optional local Provider using a reviewed private `llama-tts` runtime and hash-pinned GGUF files |
+| Kokoro dubbing | Runs locally after the model is downloaded |
+| Korean Edge TTS | Sends subtitle text to Microsoft's online speech service |
+| Speaches / OpenAI-compatible providers | Sends data to the user-configured service endpoint |
 
-上传的视频、字幕、配音和任务历史默认保存在本机，不会由本项目主动上传到云服务。使用在线 provider 前，请自行确认其隐私条款。不要将应用绑定到公网地址；默认服务仅监听 `127.0.0.1`。
+Uploaded videos, subtitles, dubbing artifacts, and task history remain on the local machine by default. Video Translator does not intentionally upload them to a project-operated cloud service. Review the privacy terms of any online provider you enable.
 
-## 常见问题
+Do not expose the development server to the public internet. It listens on `127.0.0.1` by default.
+
+## Troubleshooting
 
 ### `No LM Runtime found for model format 'gguf'`
 
-运行 `lms runtime ls`。如果没有兼容 Runtime，使用 `lms runtime get` 安装，然后用 `lms runtime select` 选择适合设备的 llama.cpp Runtime。也可以在 LM Studio 中按 `Ctrl+Shift+R` 打开 Runtime 页面。
+Run `lms runtime ls`. If no compatible Runtime is installed, use `lms runtime get`, then select a GGUF llama.cpp Runtime with `lms runtime select`. You can also press `Ctrl+Shift+R` in LM Studio to open its Runtime page.
 
-### 找不到 `lms`
+### `lms` is not found
 
-先启动一次 LM Studio，再重新打开 PowerShell 并运行 `lms --help`。也可以在设置中为 `LM_STUDIO_CLI_PATH` 填写完整路径。
+Launch LM Studio once, reopen PowerShell, and run `lms --help`. You can also set the full `LM_STUDIO_CLI_PATH` in Settings.
 
-### 找不到 FFmpeg
+### FFmpeg is not found
 
-确认 `ffmpeg -version` 和 `ffprobe -version` 可运行，或者在设置中指定 `ffmpeg.exe`。
+Confirm that `ffmpeg -version` and `ffprobe -version` work, or select `ffmpeg.exe` in Settings.
 
-### 第一次转写或配音很慢
+### The first transcription or dubbing task is slow
 
-首次运行可能正在下载模型。查看启动窗口日志，并确认网络、磁盘空间和代理设置正常。
+A model may still be downloading. Check the startup console and verify network access, available disk space, and proxy settings.
 
-### CPU 模式内存不足或速度过慢
+### CPU mode is too slow or runs out of memory
 
-尝试较小的 Whisper/LLM 模型，将 `DEVICE_PREFERENCE` 设置为 `cpu`，并将 `COMPUTE_TYPE` 设置为 `int8`。长视频仍可能需要较长时间。
+Use smaller Whisper and LLM models, set `DEVICE_PREFERENCE` to `cpu`, and use `COMPUTE_TYPE=int8`. Long videos can still require substantial processing time.
 
-## 已知限制
+## Known limitations
 
-- 当前没有 Windows 安装器或便携版。
-- 模型质量、显存占用和翻译速度取决于用户选择的模型。
-- 本地 Kokoro 普通话音色存在模型自身的声调和自然度限制。
-- 韩语配音依赖 Edge TTS 网络服务。
-- Speaches 语音克隆仍是实验性兼容路径，未纳入主路线验收。
-- 同时批量处理多个视频和一次生成多个目标语言仍在规划中。
+- There is no Windows installer or portable release yet.
+- Quality, memory use, and translation speed depend on the selected models.
+- Kokoro Mandarin voices have model-level tone and naturalness limitations.
+- Edge dubbing requires internet access and sends subtitle text to Microsoft speech services.
+- Qwen3-TTS 1.7B Base may reuse GGUF files downloaded by LM Studio; synthesis runs through the configured private `llama-tts` worker.
+- Speaches voice cloning remains an experimental compatibility path and is not part of the accepted primary workflow.
+- Multi-video batch processing and one-transcription-to-multiple-target-language workflows are still planned.
 
-## 开发与验证
+## Development and validation
 
-后端静态检查：
+Backend compilation:
 
 ```powershell
 python -m compileall -q app
 ```
 
-前端构建：
+Frontend build:
 
 ```powershell
 cd app/frontend
@@ -214,25 +244,35 @@ npm ci
 npm run build
 ```
 
-GitHub Actions 会在 Windows、Python 3.11 和 Node.js 20 上运行 Python 编译/导入冒烟、生产依赖审计和前端构建。GPU、真实模型和长视频流程仍需人工验证。
+Unified release checks, including the online production dependency audit:
 
-开发约定见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+```powershell
+python packaging/release_check.py --production-audit
+```
 
-## 运行时目录
+For a clean, committed release candidate, add
+`--evidence-output .codex-test-runs/release-evidence.json` to record the commit,
+fixed Qwen asset hashes, and exact checks performed.
 
-以下内容不会提交到 Git：
+GitHub Actions runs Python compile/import smoke checks, a production dependency audit, and the frontend build on Windows with Python 3.11 and Node.js 20. GPU, real-model, and long-video validation remain manual.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidance.
+
+## Runtime directories
+
+The following local data is not committed:
 
 - `config.yaml`
 - `app/history.json`
 - `models/`
-- `app/uploads/`、`app/output/`、`app/temp/`
-- 根目录 `uploads/`、`output/`、`temp/`
-- `.codex-backups/`、`.codex-test-runs/`
+- `app/uploads/`, `app/output/`, and `app/temp/`
+- root-level `uploads/`, `output/`, and `temp/`
+- `.codex-backups/` and `.codex-test-runs/`
 
-## 参与贡献
+## Contributing and security
 
-请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)。安全问题请按 [`SECURITY.md`](SECURITY.md) 私下报告。
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before contributing. Report security issues privately as described in [`SECURITY.md`](SECURITY.md).
 
-## License
+## License and third-party software
 
-本项目使用 [MIT License](LICENSE)。
+Video Translator source code is released under the [MIT License](LICENSE). Dependencies, models, and external tools retain their own licenses and terms. See [Third-Party Notices](THIRD-PARTY-NOTICES.md) before redistributing a binary build.

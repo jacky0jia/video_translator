@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 import ProgressBar from './ProgressBar';
@@ -10,6 +10,31 @@ export default function UploadForm({ onUpload, onUploadStart }) {
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [targetLang, setTargetLang] = useState('Chinese');
+  const [supportedLanguages, setSupportedLanguages] = useState(['Chinese', 'English', 'Japanese']);
+
+  useEffect(() => {
+    let active = true;
+    let controller;
+    const loadLanguages = () => {
+      controller?.abort();
+      controller = new AbortController();
+      return fetch('/api/dubbing/voices', { cache: 'no-store', signal: controller.signal })
+      .then(response => response.ok ? response.json() : Promise.reject(new Error('voices')))
+      .then(data => {
+        if (!active || !Array.isArray(data.supported_languages) || !data.supported_languages.length) return;
+        setSupportedLanguages(data.supported_languages);
+        setTargetLang(current => data.supported_languages.includes(current) ? current : data.supported_languages[0]);
+      })
+      .catch(error => { if (error?.name !== 'AbortError') return undefined; });
+    };
+    loadLanguages();
+    window.addEventListener('settings-changed', loadLanguages);
+    return () => {
+      active = false;
+      controller?.abort();
+      window.removeEventListener('settings-changed', loadLanguages);
+    };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -85,17 +110,15 @@ export default function UploadForm({ onUpload, onUploadStart }) {
           </div>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">{t('targetLanguage')}</label>
+          <label htmlFor="upload-target-language" className="block text-sm font-medium mb-1">{t('targetLanguage')}</label>
           <select
+            id="upload-target-language"
             value={targetLang}
             onChange={e => setTargetLang(e.target.value)}
             disabled={loading}
             className="app-input w-full"
           >
-            <option value="Chinese">Chinese</option>
-            <option value="English">English</option>
-            <option value="Japanese">Japanese</option>
-            <option value="Korean">Korean</option>
+            {supportedLanguages.map(language => <option key={language} value={language}>{language}</option>)}
           </select>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t('taskTargetHint')}</p>
         </div>

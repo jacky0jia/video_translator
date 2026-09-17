@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from app.api import config, transcribe, translation, tasks, fs, burn, dubbing, pipeline
+from app.api import capabilities, config, transcribe, translation, tasks, fs, burn, dubbing, pipeline
 from app.core.config import settings
 from app.core.history import history_manager
 
@@ -41,6 +41,7 @@ app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 # API routers must be registered BEFORE the catch-all SPA mount
 app.include_router(config.router, prefix="/api", tags=["Config"])
+app.include_router(capabilities.router, prefix="/api", tags=["Capabilities"])
 app.include_router(transcribe.router, prefix="/api", tags=["Transcription"])
 app.include_router(translation.router, prefix="/api", tags=["Translation"])
 app.include_router(tasks.router, prefix="/api", tags=["Tasks"])

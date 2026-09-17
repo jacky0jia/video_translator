@@ -67,7 +67,7 @@ export default function App() {
       setCurrentTask(data.task);
       setHighlightTaskId(null);
       setShowSource(Boolean(data.task?.transcription_path));
-      setShowTarget(Boolean(data.task?.translation_path || Object.keys(data.task?.translations || {}).length));
+      setShowTarget(true);
       setMobilePage('preview');
     } catch (error) {
       showToast(error.message, 'error');

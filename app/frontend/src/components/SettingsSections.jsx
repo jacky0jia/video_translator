@@ -26,13 +26,14 @@ export function ServicesSection({ children }) {
   );
 }
 
-export function AboutSection() {
+export function AboutSection({ edition = 'standard', t }) {
   return (
     <div className="mt-4 rounded-xl border border-gray-200 p-4 dark:border-slate-600">
-      <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">About</h3>
+      <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">{t('about')}</h3>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        <dt className="text-slate-500 dark:text-slate-400">Developer</dt><dd>Subtitle Translator Project</dd>
-        <dt className="text-slate-500 dark:text-slate-400">Interface</dt><dd>Subtitle Companion</dd>
+        <dt className="text-slate-500 dark:text-slate-400">{t('product')}</dt><dd>Video Translator</dd>
+        <dt className="text-slate-500 dark:text-slate-400">{t('edition')}</dt><dd>{edition}</dd>
+        <dt className="text-slate-500 dark:text-slate-400">{t('author')}</dt><dd>Jacky Jia</dd>
       </dl>
     </div>
   );

@@ -4,7 +4,7 @@ export default function AppLogo({ compact = false }) {
   const { t } = useI18n();
   return (
     <div className="flex min-w-0 items-center gap-2.5">
-      <svg className="h-10 w-10 shrink-0 drop-shadow-lg" viewBox="0 0 64 64" role="img" aria-label="Subtitle Companion logo">
+      <svg className="h-10 w-10 shrink-0 drop-shadow-lg" viewBox="0 0 64 64" role="img" aria-label="Video Translator logo">
         <defs>
           <linearGradient id="app-logo-gradient" x1="8" y1="6" x2="57" y2="59" gradientUnits="userSpaceOnUse">
             <stop stopColor="#596FF2" />

@@ -1,5 +1,6 @@
 # Copy this file to config.yaml to override application defaults.
 # config.yaml is ignored by Git because it may contain local paths or API keys.
+CONFIG_VERSION: 1
 
 # Translation provider: lm_studio | ollama | openai_compatible
 LLM_PROVIDER: lm_studio
@@ -14,6 +15,7 @@ LLM_API_BASE_URL: http://127.0.0.1:8001/v1
 LLM_API_KEY: ""
 LLM_MODEL_NAME: ""
 LLM_TEMPERATURE: 0.3
+TRANSLATION_BATCH_SIZE: 10
 VERIFY_SSL: true
 
 # Speech recognition. Leave ASR_MODEL_PATH empty to use ASR_MODEL_SIZE.
@@ -21,8 +23,13 @@ ASR_MODEL_SIZE: base
 ASR_MODEL_PATH: null
 ASR_API_URL: null
 ASR_REMOTE_MODEL: null
+ASR_CHUNK_LENGTH: 6
 DEVICE_PREFERENCE: auto
 COMPUTE_TYPE: auto
+
+# Long-media chunking.
+CHUNKING_THRESHOLD_MINUTES: 15
+CHUNK_OVERLAP_SECONDS: 3
 
 # Leave empty to locate ffmpeg on PATH.
 FFMPEG_PATH: null
@@ -31,6 +38,7 @@ FFMPEG_PATH: null
 TTS_MODE: kokoro
 TTS_DEFAULT_VOICE: af_heart
 TTS_SPEED: 1.0
+DUB_SAMPLE_RATE: 22050
 KOKORO_MODEL_PATH: ""
 KOKORO_VOICES_PATH: ""
 

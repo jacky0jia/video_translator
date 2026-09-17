@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "package_revision": 3,
+  "platform": "windows-x86_64",
+  "runtime_version": "b10792-c5a5535e6",
+  "archives": {
+    "llama": {
+      "filename": "llama-b10792-bin-win-cuda-12.4-x64.zip",
+      "sha256": "9b0f2b64511d36688427daeada6f001ba544b5bcb5f5405fe86a0be4b230461d"
+    },
+    "cuda": {
+      "filename": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+    },
+    "vulkan": {
+      "filename": "llama-b10792-bin-win-vulkan-x64.zip",
+      "sha256": "c55e5ce547153d21ff2ab4f19fada11e808f7372db8c57f69ca721d5976b2613"
+    }
+  },
+  "model": {
+    "filename": "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf",
+    "sha256": "8d18c94acb2addd042f97da63c98be144eafa76d0d9495177eab65130cf85129",
+    "mmproj_filename": "mmproj-Qwen3-TTS-12Hz-1.7B-Base-bf16.gguf",
+    "mmproj_sha256": "b9503e95e44705739cf82c15ce909b040b96a31ad79d02cf4dc5e1484399265d"
+  },
+  "support_files": {
+    "LICENSE-llama.cpp": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    "NOTICE.md": "961f4eeeb8b4cc0940aaafe2d319f61b8e4a1c0fa757b89fb5c45d23b4ee3f39",
+    "runtime-manifest.b10792.json": "d58875c95acccc9c610afc5adbd290c04547501b62cfd09547bcc6cb95e8b8e5",
+    "runtime-manifest-vulkan.b10792.json": "60496bc4d0e9daad0f733d09d711f501740e6a650232ea957ac99663afa53ee3"
+  }
+}

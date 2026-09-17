@@ -8,3 +8,6 @@
 *.md text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+
+# Pinned support-file hashes must survive Windows checkout.
+packaging/llama-tts/LICENSE-llama.cpp text eol=lf

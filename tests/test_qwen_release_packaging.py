@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,27 @@ VALIDATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VALIDATOR)
 ReleaseAssetError = VALIDATOR.ReleaseAssetError
 validate_release_manifest = VALIDATOR.validate_release_manifest
+
+
+def test_windows_git_checkout_preserves_pinned_support_hashes(tmp_path):
+    def git(*arguments):
+        return subprocess.run(["git", *arguments], cwd=tmp_path, capture_output=True, check=True)
+
+    git("init", "--quiet")
+    git("config", "core.autocrlf", "true")
+    (tmp_path / ".gitattributes").write_bytes((ROOT / ".gitattributes").read_bytes())
+    support = tmp_path / "packaging" / "llama-tts"
+    support.mkdir(parents=True)
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    names = [MANIFEST.name, *manifest["support_files"]]
+    for name in names:
+        (support / name).write_bytes((MANIFEST.parent / name).read_bytes())
+    paths = [".gitattributes", *(f"packaging/llama-tts/{name}" for name in names)]
+    git("add", "--", *paths)
+    for name in names:
+        (support / name).unlink()
+    git("checkout-index", "--all", "--force")
+    validate_release_manifest(support / MANIFEST.name)
 
 
 def test_tracked_release_assets_are_complete_and_attested():

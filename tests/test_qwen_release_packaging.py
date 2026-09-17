@@ -106,6 +106,7 @@ def test_unified_release_check_has_all_required_stages():
     assert any("validate_qwen_release.py" in command for command in flattened)
     assert any("pytest -q tests" in command for command in flattened)
     assert any(command == "npm-test run build" for command in flattened)
+    assert flattened.index("npm-test run build") < flattened.index("python-test -m pytest -q tests")
     assert not any("npm-test audit" in command for command in flattened)
     assert any("from app.main import app" in command for command in flattened)
     real_commands = module.release_commands(
@@ -122,6 +123,7 @@ def test_unified_release_check_has_all_required_stages():
     audit_index = audited_flattened.index("npm-test audit --omit=dev --audit-level=high")
     build_index = audited_flattened.index("npm-test run build")
     assert audit_index < build_index
+    assert build_index < audited_flattened.index("python-test -m pytest -q tests")
 
 
 def test_manual_release_checklist_covers_runtime_acceptance():

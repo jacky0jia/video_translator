@@ -109,12 +109,13 @@ def release_commands(
     commands = [
         ([python, "-m", "compileall", "-q", "app", "packaging"], ROOT),
         ([python, "packaging/validate_qwen_release.py", "--manifest", "packaging/llama-tts/package-manifest.b10792.json"], ROOT),
-        ([python, "-m", "pytest", "-q", "tests"], ROOT),
     ]
     if production_audit:
         commands.append(([npm_command, "audit", "--omit=dev", "--audit-level=high"], ROOT / "app" / "frontend"))
     commands.extend([
         ([npm_command, "run", "build"], ROOT / "app" / "frontend"),
+        # API tests import app.main, which mounts the generated frontend.
+        ([python, "-m", "pytest", "-q", "tests"], ROOT),
         ([python, "-c", "from app.main import app; assert app.title"], ROOT),
     ])
     if archives_dir and model_dir:

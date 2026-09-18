@@ -6,9 +6,27 @@
 
 [English](README.md)
 
-一款本地优先的视频语言处理应用，在同一个浏览器界面中完成视频转写、字幕翻译、多语言配音、字幕渲染和视频导出。
+让闲置显卡派上用场：使用本地 AI 模型翻译视频、生成配音，无需按分钟支付云端翻译或语音 API 费用。
 
-> 当前状态：`v0.1.0-alpha.0`。Windows 主流程已经通过干净环境检查、自动化测试和 15 分钟真实视频验证。目前仍是源码 Alpha：用户需要自行安装 Python、Node.js、FFmpeg、LM Studio 和所需模型。
+Video Translator 在同一浏览器界面中完成视频转写、字幕翻译、多语言配音、字幕渲染和视频导出。Standard 版按 MIT 许可证免费使用。选择本地 Whisper、本地翻译模型以及 Kokoro 或 Qwen3-TTS，可在自己的机器上完成处理。
+
+本地推理使用自己的 GPU 或 CPU，无需调用付费云端翻译或语音 API；仍需合适的硬件、磁盘空间、电力，以及首次安装模型和依赖时的网络连接。模型和上游软件条款仍适用；可选在线服务可能收费。
+
+> 当前 Windows 便携版：[`v0.1.0-alpha.1`](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1)。客机安装、设置重启保留已通过验收，当前源码 CI 通过。仍处于 Alpha 阶段，质量和速度取决于模型与硬件。
+
+## 利用现有显卡运行本地模型
+
+可在显卡闲置时手动运行任务。应用按顺序调度转写、翻译和配音，通过单 GPU FIFO 调度及阶段间模型释放减少显存争用；不会自动检测闲置状态，也不保证不影响其它应用。
+
+NVIDIA CUDA 和 CPU 路线已验收，AMD RX 5700 XT 的 Qwen Vulkan 配音路线也已通过。AMD 结果仅适用于 Qwen worker，不代表所有阶段都支持 AMD GPU 加速。模型需适合自己的显存与内存；CPU 可用但较慢。
+
+## Windows 便携主体包
+
+从 [Releases](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1) 下载完整 Windows x64 ZIP 并解压，双击 `start-portable.bat` 启动、`install-upstream.bat` 打开依赖安装菜单。主体自带 Python、已构建前端、ASR small 和八个参考音色，无需另装 Python/Node.js。
+
+FFmpeg、Kokoro/loader、Qwen 模型及 runtime 由用户从固定上游来源安装，菜单展示条款、进度并校验 SHA-256；Qwen 在设置页继续预检安装，路径自动填写。菜单 5 可校验已安装组件。默认本地翻译路线需另装 LM Studio 和指令模型，也可使用 Ollama 或其它兼容服务。
+
+主说明与脚本默认英文，中文为附加翻译；参见[英文便携安装指导](packaging/UPSTREAM-INSTALL.md)。不要将增加上游下载后的安装目录重新打包并沿用原始主体的发行结论。
 
 ## 功能
 
@@ -39,7 +57,7 @@
 - 推荐 NVIDIA GPU；CPU 模式可以运行，但转写和生成速度明显较慢
 - LM Studio 0.4 系列、GGUF llama.cpp Runtime 和本地指令模型
 
-Linux、macOS、AMD GPU、Intel GPU 和 Docker 尚未成为正式发布路径。欢迎测试和反馈，但目前不提供正式支持。
+AMD RX 5700 XT 已通过 Windows 上的 Qwen Vulkan 配音、安装和回滚验证。其它 AMD/Intel 显卡以及 Linux、macOS、Docker 尚未成为已验收发布路径；不据此宣称 Whisper 或翻译服务的通用 AMD GPU 加速。
 
 ## 安装
 
@@ -140,8 +158,8 @@ $env:APP_PORT = "9000"
 
 1. 打开 **Settings → Services & diagnostics**。
 2. 保持 `lm_studio` 为 LLM provider，并选择已经下载的模型。
-3. `ASR_MODEL_PATH` 为空时，faster-whisper 会下载 `ASR_MODEL_SIZE` 对应模型，默认是 `base`。
-4. Kokoro 路径为空时，第一次配音会把模型下载到 `models/kokoro/`。
+3. 便携主体已配置 ASR small；源码安装时，`ASR_MODEL_PATH` 为空会使用 `ASR_MODEL_SIZE`，默认 `base`，可能需要下载。
+4. 便携主体需先在安装菜单准备 FFmpeg 和所选 Kokoro/Qwen 依赖；源码安装时，Kokoro 空路径可能在首次配音下载模型。
 5. 上传视频并选择目标语言。
 6. 转写完成后，在 Process 中选择 **Subtitles** 或 **Dubbing**，然后从 Export 下载产物。
 
@@ -166,7 +184,9 @@ Copy-Item config.example.yaml config.yaml
 - `ASR_MODEL_SIZE`、`ASR_MODEL_PATH`、`ASR_API_URL`
 - `DEVICE_PREFERENCE`：`auto`、`gpu` 或 `cpu`
 - `COMPUTE_TYPE`：`auto`、`float16` 或 `int8`
-- `TTS_MODE`：`kokoro`、`edge` 或 `speaches`
+- `TTS_MODE`：标准设置界面为 `kokoro`、`edge`、`qwen`；`speaches` 仅为旧兼容路线
+- `QWEN_AUTO_CPU_FALLBACK`：GPU worker 不可用时允许回退 CPU
+- `UI_LANGUAGE`：本机保存的界面语言（`en` 或 `zh`）
 - `DUB_SAMPLE_RATE`：标准化 mono PCM 输出采样率（默认 `22050`）
 - `KOKORO_MODEL_PATH`、`KOKORO_VOICES_PATH`
 - `FFMPEG_PATH`
@@ -212,7 +232,7 @@ Copy-Item config.example.yaml config.yaml
 
 ## 已知限制
 
-- 当前没有 Windows 安装器或便携版。
+- 已提供 Windows x64 便携 ZIP，尚无 MSI/EXE 安装器。
 - 质量、内存占用和翻译速度取决于选择的模型。
 - Kokoro 普通话音色存在模型自身的声调和自然度限制。
 - Edge 配音需要联网，并会将字幕文本发送到 Microsoft 在线语音服务。

@@ -6,15 +6,32 @@
 
 [简体中文](README.zh-CN.md)
 
-A local-first application for video transcription, subtitle translation, multilingual dubbing, subtitle rendering, and video export from one browser interface.
+Put your idle GPU to work: translate and dub videos with local AI models, without per-minute cloud API fees.
 
-> Current status: `v0.1.0-alpha.0`. The primary Windows workflow has passed clean-environment checks, automated tests, and a 15-minute real-video validation. The source setup below requires Python, Node.js, FFmpeg, LM Studio and models. A separately prepared Windows public core includes its own Python and built frontend; follow its bundled setup guide when using that package.
+Video Translator brings transcription, subtitle translation, multilingual dubbing, styled subtitles, and video export into one browser interface. The Standard edition is free to use under the MIT license. Choose local Whisper, a local translation model, and local Kokoro or Qwen3-TTS speech generation to process videos on your own machine.
+
+Local inference uses your own GPU or CPU instead of a paid cloud translation or speech API. You still need suitable hardware, disk space, electricity, and an initial internet connection to install models and dependencies. Model and upstream software terms apply; optional online providers have their own terms and may charge fees.
+
+> Current Windows portable release: [`v0.1.0-alpha.1`](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1). Windows guest installation and settings persistence have been accepted, and current source CI passes. This is an Alpha release: output quality and processing speed depend on your models and hardware.
+
+## Make use of the GPU you already own
+
+Run a job while your graphics card is otherwise idle. The application coordinates transcription, translation, and dubbing in sequence, with single-GPU FIFO scheduling and model release between stages to reduce competition for VRAM. It does not automatically detect idle hardware or promise to avoid interference with other applications.
+
+| Stage | Local route | Result |
+| --- | --- | --- |
+| Transcribe | faster-whisper | Original subtitles from video speech |
+| Translate | LM Studio; optional Ollama or a local OpenAI-compatible server | Translated or bilingual subtitles |
+| Dub | Kokoro or application-private Qwen3-TTS | Speech audio and a dubbed video |
+| Export | FFmpeg | SRT/VTT/ASS, styled subtitles, WAV, and MP4 |
+
+NVIDIA CUDA and CPU routes are accepted. Qwen dubbing also has an accepted Vulkan route on an AMD RX 5700 XT. This AMD result applies to the Qwen worker, not GPU acceleration of every stage. Pick models that fit your VRAM and RAM; CPU processing remains available but is slower.
 
 ## Portable Windows core
 
-If you received a public core package, start with its English `README.md` or `README-PORTABLE.md`. Double-click `start-portable.bat` to start the application and `install-upstream.bat` for the dependency setup menu. You do not need to install Python or Node.js separately for this package.
+Download the full Windows x64 core ZIP from [Releases](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1), extract it, and read its English `README.md` or `README-PORTABLE.md`. Double-click `start-portable.bat` to start the application and `install-upstream.bat` for the dependency setup menu. You do not need to install Python or Node.js separately for this package.
 
-FFmpeg, Kokoro models/voices, espeakng-loader and Qwen models/runtime are installed directly from pinned upstream sources. The menu displays upstream terms, download progress and SHA-256 checks. Qwen installation continues in Settings with the download paths filled automatically. Use menu 5 to check installed components. Translation still requires a separate LM Studio installation.
+The core includes Python, the built frontend, the ASR small model, and eight reference voices. FFmpeg, Kokoro models/voices, espeakng-loader and Qwen models/runtime are installed directly from pinned upstream sources. The menu displays upstream terms, download progress and SHA-256 checks. Qwen installation continues in Settings with the download paths filled automatically. Use menu 5 to check installed components. For the default translation route, install LM Studio separately and download a suitable instruction model; Ollama and OpenAI-compatible providers are optional alternatives.
 
 See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English is the primary language for setup scripts, README files and release instructions; `.zh-CN.md` files are optional translations. Shipped third-party licenses and attribution retain their upstream text. A directory augmented with downloaded dependencies is not the original public core and must not reuse its distribution readiness claim.
 
@@ -30,7 +47,7 @@ See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English i
 - Dubbed WAV and muxed MP4 output
 - Live SSE progress, cancellation, failed-stage retry, and task recovery
 - Single-GPU FIFO orchestration with model release between Whisper, LM Studio, and dubbing stages
-- English and Simplified Chinese interfaces with desktop and mobile layouts
+- English and Simplified Chinese interfaces with desktop and mobile layouts; saved local language survives browser/application restart
 
 ## Editions
 
@@ -47,7 +64,7 @@ A separate **Supporter Edition** is planned for experimental voice cloning, voic
 - NVIDIA GPU recommended; CPU mode works but transcription and generation are much slower
 - LM Studio 0.4 series, a GGUF llama.cpp Runtime, and a local instruction model
 
-Linux, macOS, AMD GPU, Intel GPU, and Docker are not accepted release paths yet. Testing and feedback are welcome, but these platforms are not currently supported.
+The AMD RX 5700 XT has passed Qwen Vulkan dubbing, installation, and rollback checks on Windows. Other AMD/Intel cards and Linux, macOS, and Docker are not accepted release paths. CPU execution is supported; no general AMD acceleration claim is made for Whisper or translation providers.
 
 ## Installation
 
@@ -148,8 +165,8 @@ $env:APP_PORT = "9000"
 
 1. Open **Settings → Services & diagnostics**.
 2. Keep `lm_studio` as the LLM provider and select a downloaded model.
-3. If `ASR_MODEL_PATH` is empty, faster-whisper downloads the selected `ASR_MODEL_SIZE`; the default is `base`.
-4. If the Kokoro paths are empty, the first dubbing task downloads the model into `models/kokoro/`.
+3. The portable core already configures ASR small. In a source setup, an empty `ASR_MODEL_PATH` uses the configured `ASR_MODEL_SIZE` (default `base`) and may download it.
+4. For the portable core, use the setup menu to install FFmpeg and the desired Kokoro/Qwen dependencies before processing. In a source setup, empty Kokoro paths may download the model on first use.
 5. Upload a video and select a target language.
 6. After transcription, choose **Subtitles** or **Dubbing** under Process, then download the artifacts from Export.
 
@@ -174,7 +191,9 @@ Common fields:
 - `ASR_MODEL_SIZE`, `ASR_MODEL_PATH`, `ASR_API_URL`
 - `DEVICE_PREFERENCE`: `auto`, `gpu`, or `cpu`
 - `COMPUTE_TYPE`: `auto`, `float16`, or `int8`
-- `TTS_MODE`: `kokoro`, `edge`, or `speaches`
+- `TTS_MODE`: `kokoro`, `edge`, or `qwen` in the standard Settings UI; `speaches` remains a legacy compatibility route
+- `QWEN_AUTO_CPU_FALLBACK`: allow fallback when the requested GPU worker cannot run
+- `UI_LANGUAGE`: saved local interface preference (`en` or `zh`)
 - `DUB_SAMPLE_RATE`: normalized mono PCM output rate (default `22050`)
 - `KOKORO_MODEL_PATH`, `KOKORO_VOICES_PATH`
 - `FFMPEG_PATH`
@@ -189,7 +208,7 @@ See [`config.example.yaml`](config.example.yaml) for a complete example.
 | LM Studio translation | Runs in the user's local LM Studio instance |
 | Qwen3-TTS dubbing | Optional local Provider using a reviewed private `llama-tts` runtime and hash-pinned GGUF files |
 | Kokoro dubbing | Runs locally after the model is downloaded |
-| Korean Edge TTS | Sends subtitle text to Microsoft's online speech service |
+| Edge TTS (Chinese, English, Japanese, Korean) | Sends subtitle text to Microsoft's online speech service |
 | Speaches / OpenAI-compatible providers | Sends data to the user-configured service endpoint |
 
 Uploaded videos, subtitles, dubbing artifacts, and task history remain on the local machine by default. Video Translator does not intentionally upload them to a project-operated cloud service. Review the privacy terms of any online provider you enable.
@@ -220,7 +239,7 @@ Use smaller Whisper and LLM models, set `DEVICE_PREFERENCE` to `cpu`, and use `C
 
 ## Known limitations
 
-- There is no Windows installer or portable release yet.
+- A Windows x64 portable ZIP is available; there is no MSI/EXE installer yet.
 - Quality, memory use, and translation speed depend on the selected models.
 - Kokoro Mandarin voices have model-level tone and naturalness limitations.
 - Edge dubbing requires internet access and sends subtitle text to Microsoft speech services.

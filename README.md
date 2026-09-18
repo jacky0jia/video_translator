@@ -8,7 +8,7 @@
 
 Put your idle GPU to work: translate and dub videos with local AI models, without per-minute cloud API fees.
 
-Video Translator brings transcription, subtitle translation, multilingual dubbing, styled subtitles, and video export into one browser interface. The Standard edition is free to use under the MIT license. Choose local Whisper, a local translation model, and local Kokoro or Qwen3-TTS speech generation to process videos on your own machine.
+Video Translator brings transcription, subtitle translation, multilingual dubbing, styled subtitles, and video export into one browser interface. The application is free to use under the MIT license. Choose local Whisper, a local translation model, and local Kokoro or Qwen3-TTS speech generation to process videos on your own machine.
 
 Local inference uses your own GPU or CPU instead of a paid cloud translation or speech API. You still need suitable hardware, disk space, electricity, and an initial internet connection to install models and dependencies. Model and upstream software terms apply; optional online providers have their own terms and may charge fees.
 
@@ -50,12 +50,6 @@ See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English i
 - Live SSE progress, cancellation, failed-stage retry, and task recovery
 - Single-GPU FIFO orchestration with model release between Whisper, LM Studio, and dubbing stages
 - English and Simplified Chinese interfaces with desktop and mobile layouts; saved local language survives browser/application restart
-
-## Editions
-
-This repository contains the open-source **Standard** edition. Standard includes the complete base transcription, translation, subtitle, dubbing, and export workflow.
-
-A separate **Supporter Edition** is planned for experimental voice cloning, voice design, reusable character voices, and installable visual themes. Its private implementation and builds will not be stored in this public repository. No Supporter Edition download is available yet.
 
 ## Verified environment
 
@@ -142,7 +136,7 @@ See the [LM Studio CLI documentation](https://lmstudio.ai/docs/cli) and [Runtime
 
 ### Qwen3-TTS status
 
-The local Qwen route targets only `Qwen3-TTS-12Hz-1.7B-Base-GGUF`. LM Studio may provide the downloaded GGUF files, while an application-private, hash-pinned `llama-tts` worker performs synthesis. Eight application-owned, public-domain LibriVox reference samples are presented as fixed built-in voices; Standard does not expose sample paths, uploads, replacement, or managed voice cloning.
+The local Qwen route targets only `Qwen3-TTS-12Hz-1.7B-Base-GGUF`. LM Studio may provide the downloaded GGUF files, while an application-private, hash-pinned `llama-tts` worker performs synthesis. Eight application-owned, public-domain LibriVox reference samples are presented as fixed built-in voices; The application does not expose sample paths, uploads, replacement, or managed voice cloning.
 
 Qwen dubbing is available when the reviewed private `llama-tts` runtime bundle is configured. It does not depend on an LM Studio speech API and does not require Python, Torch, or the official `qwen-tts` Python package. Qwen mode keeps all ten supported languages, including Korean, on the local worker.
 
@@ -193,7 +187,7 @@ Common fields:
 - `ASR_MODEL_SIZE`, `ASR_MODEL_PATH`, `ASR_API_URL`
 - `DEVICE_PREFERENCE`: `auto`, `gpu`, or `cpu`
 - `COMPUTE_TYPE`: `auto`, `float16`, or `int8`
-- `TTS_MODE`: `kokoro`, `edge`, or `qwen` in the standard Settings UI; `speaches` remains a legacy compatibility route
+- `TTS_MODE`: `kokoro`, `edge`, or `qwen` in the Settings UI; `speaches` remains a legacy compatibility route
 - `QWEN_AUTO_CPU_FALLBACK`: allow fallback when the requested GPU worker cannot run
 - `UI_LANGUAGE`: saved local interface preference (`en` or `zh`)
 - `DUB_SAMPLE_RATE`: normalized mono PCM output rate (default `22050`)

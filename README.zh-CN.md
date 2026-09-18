@@ -8,7 +8,7 @@
 
 让闲置显卡派上用场：使用本地 AI 模型翻译视频、生成配音，无需按分钟支付云端翻译或语音 API 费用。
 
-Video Translator 在同一浏览器界面中完成视频转写、字幕翻译、多语言配音、字幕渲染和视频导出。Standard 版按 MIT 许可证免费使用。选择本地 Whisper、本地翻译模型以及 Kokoro 或 Qwen3-TTS，可在自己的机器上完成处理。
+Video Translator 在同一浏览器界面中完成视频转写、字幕翻译、多语言配音、字幕渲染和视频导出。本应用按 MIT 许可证免费使用。选择本地 Whisper、本地翻译模型以及 Kokoro 或 Qwen3-TTS，可在自己的机器上完成处理。
 
 本地推理使用自己的 GPU 或 CPU，无需调用付费云端翻译或语音 API；仍需合适的硬件、磁盘空间、电力，以及首次安装模型和依赖时的网络连接。模型和上游软件条款仍适用；可选在线服务可能收费。
 
@@ -43,12 +43,6 @@ FFmpeg、Kokoro/loader、Qwen 模型及 runtime 由用户从固定上游来源�
 - SSE 实时进度、取消、失败阶段重试和任务恢复
 - 单 GPU FIFO 调度，在 Whisper、LM Studio 和配音阶段之间释放模型
 - 英语和简体中文界面，支持桌面和移动端布局
-
-## 版本
-
-本仓库包含开源的 **Standard** 版。Standard 提供完整的基础转写、翻译、字幕、配音和导出流程。
-
-未来将单独提供 **Supporter Edition**，计划加入实验性声音克隆、音色设计、可复用角色音色和可安装视觉主题。其私有实现和构建产物不会存放在本公开仓库。目前还没有可下载的 Supporter Edition。
 
 ## 已验证环境
 
@@ -135,7 +129,7 @@ Video Translator 默认连接 `http://127.0.0.1:1234/v1`。应用可以通过 `l
 
 ### Qwen3-TTS 状态
 
-本地 Qwen 路线只使用 `Qwen3-TTS-12Hz-1.7B-Base-GGUF`。GGUF 可以复用 LM Studio 已下载的文件，语音合成则由应用私有、固定哈希的 `llama-tts` worker 执行。应用自带八个来自 LibriVox 公版内容的参考样本，并把它们表现为固定内置音色；Standard 不会暴露样本路径、上传、替换或托管式声音克隆功能。
+本地 Qwen 路线只使用 `Qwen3-TTS-12Hz-1.7B-Base-GGUF`。GGUF 可以复用 LM Studio 已下载的文件，语音合成则由应用私有、固定哈希的 `llama-tts` worker 执行。应用自带八个来自 LibriVox 公版内容的参考样本，并把它们表现为固定内置音色；应用不会暴露样本路径、上传、替换或托管式声音克隆功能。
 
 配置经过审查的私有 `llama-tts` 运行包后即可使用 Qwen 配音。它不依赖 LM Studio 语音 API，也不需要 Python、Torch 或官方 `qwen-tts` Python 包。Qwen 模式支持的十种语言（包括韩语）全部在本地 worker 中处理。
 

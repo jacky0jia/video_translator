@@ -12,7 +12,9 @@ Video Translator brings transcription, subtitle translation, multilingual dubbin
 
 Local inference uses your own GPU or CPU instead of a paid cloud translation or speech API. You still need suitable hardware, disk space, electricity, and an initial internet connection to install models and dependencies. Model and upstream software terms apply; optional online providers have their own terms and may charge fees.
 
-> Current Windows portable release: [`v0.1.0-alpha.1`](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1). Windows guest installation and settings persistence have been accepted, and current source CI passes. This is an Alpha release: output quality and processing speed depend on your models and hardware.
+> Current Windows portable release: [`v0.1.0-alpha.2`](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.2). Windows guest installation and settings persistence have been accepted, and current source CI passes. This is an Alpha release: output quality and processing speed depend on your models and hardware.
+
+This security update runs on the same computer as your browser. It blocks LAN access and cross-origin browser requests. Extract it into a new directory; retain your previous installation for rollback and migrate your settings and installed upstream components as described in the release notes. See [SECURITY.md](SECURITY.md) for the security scope and remaining limitations.
 
 ## Make use of the GPU you already own
 
@@ -29,7 +31,7 @@ NVIDIA CUDA and CPU routes are accepted. Qwen dubbing also has an accepted Vulka
 
 ## Portable Windows core
 
-Download the full Windows x64 core ZIP from [Releases](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1), extract it, and read its English `README.md` or `README-PORTABLE.md`. Double-click `start-portable.bat` to start the application and `install-upstream.bat` for the dependency setup menu. You do not need to install Python or Node.js separately for this package.
+Download the full Windows x64 core ZIP from [Releases](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.2), extract it, and read its English `README.md` or `README-PORTABLE.md`. Double-click `start-portable.bat` to start the application and `install-upstream.bat` for the dependency setup menu. You do not need to install Python or Node.js separately for this package.
 
 The core includes Python, the built frontend, the ASR small model, and eight reference voices. FFmpeg, Kokoro models/voices, espeakng-loader and Qwen models/runtime are installed directly from pinned upstream sources. The menu displays upstream terms, download progress and SHA-256 checks. Qwen installation continues in Settings with the download paths filled automatically. Use menu 5 to check installed components. For the default translation route, install LM Studio separately and download a suitable instruction model; Ollama and OpenAI-compatible providers are optional alternatives.
 

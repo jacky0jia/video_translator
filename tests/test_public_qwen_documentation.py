@@ -9,7 +9,7 @@ class PublicQwenDocumentationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         for filename in ("README.md", "README.zh-CN.md"):
             document = (root / filename).read_text(encoding="utf-8")
-            self.assertIn("releases/tag/v0.1.0-alpha.1", document)
+            self.assertIn("releases/tag/v0.1.0-alpha.2", document)
             self.assertIn("start-portable.bat", document)
             self.assertIn("install-upstream.bat", document)
             mode_line = next(line for line in document.splitlines() if "`TTS_MODE`" in line)
@@ -41,6 +41,11 @@ class PublicQwenDocumentationTests(unittest.TestCase):
         self.assertIn("private `llama-tts` worker", english)
         self.assertIn("私有 `llama-tts` worker", chinese)
         self.assertNotIn("until LM Studio exposes", english)
+        self.assertIn("blocks LAN access", english)
+        self.assertIn("cross-origin browser requests", english)
+        self.assertIn("SECURITY.md", english)
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn("## 0.1.0-alpha.2 - 2026-09-18", changelog)
 
     def test_notices_record_model_and_voice_asset_redistribution_metadata(self):
         root = Path(__file__).resolve().parents[1]

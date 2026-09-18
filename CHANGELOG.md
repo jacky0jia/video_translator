@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.2 - 2026-09-18
 
 - Harden the local-only HTTP boundary against cross-origin requests and unexpected hosts.
 - Ignore proxy headers in launchers, isolate uploaded/generated content and limit request bodies.

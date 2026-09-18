@@ -12,7 +12,9 @@ Video Translator 在同一浏览器界面中完成视频转写、字幕翻译、
 
 本地推理使用自己的 GPU 或 CPU，无需调用付费云端翻译或语音 API；仍需合适的硬件、磁盘空间、电力，以及首次安装模型和依赖时的网络连接。模型和上游软件条款仍适用；可选在线服务可能收费。
 
-> 当前 Windows 便携版：[`v0.1.0-alpha.1`](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1)。客机安装、设置重启保留已通过验收，当前源码 CI 通过。仍处于 Alpha 阶段，质量和速度取决于模型与硬件。
+安全更新仅供同一台电脑上的浏览器访问，阻止局域网及跨站请求。请解压到新目录，保留旧安装用于回滚；配置及上游组件迁移方式见发行说明，安全边界见 [SECURITY.md](SECURITY.md)。
+
+> 当前 Windows 便携版：[`v0.1.0-alpha.2`](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.2)。客机安装、设置重启保留已通过验收，当前源码 CI 通过。仍处于 Alpha 阶段，质量和速度取决于模型与硬件。
 
 ## 利用现有显卡运行本地模型
 
@@ -22,7 +24,7 @@ NVIDIA CUDA 和 CPU 路线已验收，AMD RX 5700 XT 的 Qwen Vulkan 配音路�
 
 ## Windows 便携主体包
 
-从 [Releases](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.1) 下载完整 Windows x64 ZIP 并解压，双击 `start-portable.bat` 启动、`install-upstream.bat` 打开依赖安装菜单。主体自带 Python、已构建前端、ASR small 和八个参考音色，无需另装 Python/Node.js。
+从 [Releases](https://github.com/jacky0jia/video_translator/releases/tag/v0.1.0-alpha.2) 下载完整 Windows x64 ZIP 并解压，双击 `start-portable.bat` 启动、`install-upstream.bat` 打开依赖安装菜单。主体自带 Python、已构建前端、ASR small 和八个参考音色，无需另装 Python/Node.js。
 
 FFmpeg、Kokoro/loader、Qwen 模型及 runtime 由用户从固定上游来源安装，菜单展示条款、进度并校验 SHA-256；Qwen 在设置页继续预检安装，路径自动填写。菜单 5 可校验已安装组件。默认本地翻译路线需另装 LM Studio 和指令模型，也可使用 Ollama 或其它兼容服务。
 

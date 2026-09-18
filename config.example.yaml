@@ -34,7 +34,7 @@ CHUNK_OVERLAP_SECONDS: 3
 # Leave empty to locate ffmpeg on PATH.
 FFMPEG_PATH: null
 
-# Dubbing: kokoro | edge | speaches
+# Dubbing: kokoro | qwen | edge | speaches (cosyvoice is paused).
 TTS_MODE: kokoro
 TTS_DEFAULT_VOICE: af_heart
 TTS_SPEED: 1.0

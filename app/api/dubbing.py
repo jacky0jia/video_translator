@@ -1,6 +1,5 @@
 """Dubbing API routes. Mirrors the structure of `app/api/burn.py`."""
 import logging
-import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -9,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.file_security import AUDIO_EXTENSIONS, MAX_CLONE_BYTES, save_upload, validate_file_component
 from app.core.history import history_manager
 from app.services.dubbing_service import dubbing_service
 from app.services.dubbing_service import _is_kokoro_mode
@@ -226,23 +226,13 @@ async def list_voices():
 
 @router.post("/dubbing/clone-sample")
 async def upload_clone_sample(task_id: str = Form(...), file: UploadFile = File(...)):
+    validate_file_component(task_id, 'task ID')
     task = history_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    safe_name = Path(file.filename).name
-    if not safe_name.lower().endswith((".wav", ".mp3", ".flac", ".ogg", ".m4a")):
-        raise HTTPException(status_code=400, detail="Unsupported audio format")
-
     sample_dir = settings.UPLOAD_DIR / "voice_samples" / task_id
-    sample_dir.mkdir(parents=True, exist_ok=True)
-    dest = sample_dir / f"clone_{int(time.time())}_{safe_name}"
-    with open(dest, "wb") as buf:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            buf.write(chunk)
+    dest, safe_name = await save_upload(file, sample_dir, AUDIO_EXTENSIONS, MAX_CLONE_BYTES)
     return {"path": str(dest), "filename": safe_name}
 
 

@@ -21,6 +21,22 @@ verify = load_module('upstream_verifier_under_test', ROOT / 'packaging/portable_
 
 
 class UpstreamDeliveryTests(unittest.TestCase):
+    def test_public_builder_rejects_old_installer_tools_and_bootstrap(self):
+        for old_installed in (True, False):
+            with self.subTest(old_installed=old_installed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                options = self.fixture(root)
+                inventory = [{'name': 'demo', 'version': '1'}]
+                if old_installed:
+                    inventory.append({'name': 'pip', 'version': '25.3'})
+                else:
+                    bundled = options['python_runtime'] / 'Lib/ensurepip/_bundled'
+                    (bundled / 'pip-26.2.0-py3-none-any.whl').rename(bundled / 'pip-24.0-py3-none-any.whl')
+                with patch.object(builder, '_python_inventory', return_value=inventory):
+                    with self.assertRaisesRegex(RuntimeError, 'Runtime security checks failed'):
+                        builder.build_portable(output_dir=root / 'public', **options)
+                self.assertFalse((root / 'public').exists())
+
     def test_script_messages_are_english_and_menu_exit_is_english(self):
         self.assertTrue(builder.PORTABLE_README.isascii())
         self.assertTrue(builder.PUBLIC_RELEASE_NOTE.isascii())
@@ -162,7 +178,7 @@ class UpstreamDeliveryTests(unittest.TestCase):
         (runtime / 'python.exe').write_bytes(b'python')
         ensurepip = runtime / 'Lib/ensurepip/_bundled'
         ensurepip.mkdir(parents=True)
-        (ensurepip / 'pip-24.0-py3-none-any.whl').write_bytes(b'python bootstrap wheel')
+        (ensurepip / 'pip-26.2.0-py3-none-any.whl').write_bytes(b'python bootstrap wheel')
         loader = site / 'espeakng_loader-0.2.4.dist-info'
         loader.mkdir()
         (loader / 'METADATA').write_text('Name: espeakng-loader\nVersion: 0.2.4\n')
@@ -217,7 +233,7 @@ class UpstreamDeliveryTests(unittest.TestCase):
             self.assertEqual((bundle / 'README.md').read_bytes(), (bundle / 'README-PORTABLE.md').read_bytes())
             self.assertTrue((bundle / 'README-PORTABLE.zh-CN.md').is_file())
             self.assertFalse((bundle / 'runtime/Lib/site-packages/espeakng_loader').exists())
-            self.assertTrue((bundle / 'runtime/Lib/ensurepip/_bundled/pip-24.0-py3-none-any.whl').is_file())
+            self.assertTrue((bundle / 'runtime/Lib/ensurepip/_bundled/pip-26.2.0-py3-none-any.whl').is_file())
             licenses = json.loads((bundle / 'licenses/THIRD-PARTY-MANIFEST.json').read_text())
             self.assertEqual([p['name'] for p in licenses['python']['packages']], ['demo'])
             self.assertEqual([p['id'] for p in licenses['external']['components']], ['asr-model'])

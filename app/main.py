@@ -1,6 +1,6 @@
 import logging
-import os
 import sys
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api import capabilities, config, transcribe, translation, tasks, fs, burn, dubbing, pipeline
 from app.core.config import settings
 from app.core.history import history_manager
+from app.core.file_security import contained_file
+from app.core.web_security import LocalWebSecurityMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -38,6 +40,7 @@ async def lifespan(app: FastAPI):
         await pipeline_service.shutdown()
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+app.add_middleware(LocalWebSecurityMiddleware)
 
 # API routers must be registered BEFORE the catch-all SPA mount
 app.include_router(config.router, prefix="/api", tags=["Config"])
@@ -60,23 +63,28 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # Serve uploaded videos for preview with Range request support (enables video seek)
 @app.get("/video/{filename}")
 async def video_stream(filename: str, request: Request):
-    # Prevent path traversal: strip any path components and resolve within UPLOAD_DIR
-    safe_name = os.path.basename(filename)
-    file_path = os.path.realpath(os.path.join(settings.UPLOAD_DIR, safe_name))
-    upload_dir = os.path.realpath(settings.UPLOAD_DIR)
-    if not file_path.startswith(upload_dir) or not os.path.exists(file_path):
+    if any(c in filename for c in ('/', '\\', ':', '\x00')):
         raise HTTPException(status_code=404, detail="Video not found")
-    file_size = os.path.getsize(file_path)
+    file_path = contained_file(settings.UPLOAD_DIR, filename)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    file_size = file_path.stat().st_size
     range_header = request.headers.get("range")
     if range_header:
-        try:
-            h = range_header.replace("bytes=", "").split("-")
-            start = int(h[0]) if h[0] else 0
-            end = int(h[1]) if h[1] else file_size - 1
-        except Exception:
-            start, end = 0, file_size - 1
-        if start >= file_size:
-            raise HTTPException(status_code=416, detail="Range not satisfiable")
+        match = re.fullmatch(r'bytes=([0-9]{0,20})-([0-9]{0,20})', range_header)
+        if not match or not any(match.groups()) or file_size == 0:
+            raise HTTPException(416, 'Range not satisfiable', headers={'Content-Range': f'bytes */{file_size}'})
+        first, last = match.groups()
+        if first:
+            start = int(first)
+            end = int(last) if last else file_size - 1
+        else:
+            suffix = int(last)
+            start, end = max(0, file_size - suffix), file_size - 1
+            if suffix == 0:
+                start = file_size
+        if start >= file_size or end < start:
+            raise HTTPException(416, 'Range not satisfiable', headers={'Content-Range': f'bytes */{file_size}'})
         end = min(end, file_size - 1)
         length = end - start + 1
         def iterfile():

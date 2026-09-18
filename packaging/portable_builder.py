@@ -20,6 +20,7 @@ if PACKAGING_DIR not in sys.path:
     sys.path.insert(0, PACKAGING_DIR)
 from portable_licenses import build_license_bundle
 from upstream_policy import assert_upstream_assets_absent
+from runtime_security import runtime_security_blockers
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -316,6 +317,10 @@ def build_portable(*, output_dir: Path, source_root: Path = ROOT, python_runtime
         (staging / "README-PORTABLE.md").write_text(readme, encoding="utf-8")
         (staging / "README.md").write_text(readme, encoding="utf-8")
         inventory = _python_inventory(staging / "runtime")
+        if public_distribution:
+            blockers = runtime_security_blockers(inventory, staging / 'runtime')
+            if blockers:
+                raise RuntimeError('Runtime security checks failed: ' + '; '.join(blockers))
         (staging / "python-packages.json").write_text(
             json.dumps(inventory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

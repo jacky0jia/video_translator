@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +9,7 @@ from app.core.config import settings
 from app.core.history import history_manager
 from app.core.events import emit_event
 from app.core.schemas import TranscriptionResult
+from app.core.file_security import MEDIA_EXTENSIONS, MAX_MEDIA_BYTES, save_upload, validate_file_component
 from app.services.asr_service import asr_service
 from app.services.audio_service import audio_service
 from app.services.chunking_service import chunking_service, deduplicate_segments
@@ -125,17 +125,17 @@ async def transcribe_video(
             detail="Please provide either a video file upload or a valid local path.",
         )
 
+    validate_file_component(target_lang, 'target language')
+    if local_path and not file:
+        path = Path(local_path)
+        if str(local_path).startswith(('\\\\', '//')) or not path.is_file():
+            raise HTTPException(400, 'Local media file is unavailable')
+
     processed_source = local_path
     filename = Path(local_path).name if local_path else "unknown_video"
 
     if file:
-        # Prevent path traversal via uploaded filename
-        safe_filename = os.path.basename(file.filename)
-        upload_path = settings.UPLOAD_DIR / safe_filename
-        settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        with open(upload_path, "wb") as buffer:
-            while content := await file.read(1024 * 1024):
-                buffer.write(content)
+        upload_path, safe_filename = await save_upload(file, settings.UPLOAD_DIR, MEDIA_EXTENSIONS, MAX_MEDIA_BYTES)
         processed_source = str(upload_path)
         filename = safe_filename
 

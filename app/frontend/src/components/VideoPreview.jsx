@@ -317,7 +317,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           playsInline
           webkit-playsinline="true"
           preload="metadata"
-          src={`/video/${task.filename}`}
+          src={task.video_url || `/video/${encodeURIComponent(task.filename)}`}
           onTimeUpdate={handleTimeUpdate}></video>
         {isIOSFullscreen && (
           <button

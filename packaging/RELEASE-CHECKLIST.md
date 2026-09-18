@@ -46,6 +46,25 @@ file, add a supplemental component named `python:<normalized-name>-<version>` or
 `license` attachment. `qwen-runtime` is the corresponding supplemental ID.
 Review the generated manifest before publishing.
 
+### Security checks for new public builds
+
+Run both production and full frontend dependency audits, plus a current PyPI
+advisory scan of the actual `python-packages.json`. As of 2026-09-18, public builds
+reject installed pip below 26.2.0 and wheel below 0.46.2; pip wheels under
+`runtime/Lib/ensurepip/_bundled` must also meet that minimum. Update tools and
+bootstrap wheels in a disposable runtime, collect their exact license texts, and
+verify the inventory before rebuilding. Preserve the original released ZIP.
+
+Setuptools 80.9.0 is retained for jieba's `pkg_resources` compatibility. Its
+GHSA-h35f-9h28-mq5c advisory concerns Unicode exclusion rules when publishing
+source distributions, especially on macOS; this Windows ZIP builder does not run
+`sdist`. Do not use the bundled runtime to publish source distributions. Review
+this exception when the platform, build process or setuptools dependency changes.
+
+Verify HTTP origin/Host checks, upload isolation, preview seeking and subtitle
+export on the new candidate. The source fixes are not present in an old portable
+ZIP. Unchanged ASR/TTS models and native assets may reuse prior hardware results.
+
 - [ ] Run `python packaging/release_check.py --production-audit`.
 - [ ] Run the same command with `--qwen-archives-dir` and `--qwen-model-dir` on an NVIDIA release machine.
 - [ ] Confirm production dependency audit has no high-severity findings.

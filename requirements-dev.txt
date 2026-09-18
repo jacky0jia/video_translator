@@ -1,2 +1,5 @@
 -r requirements.txt
 pytest>=9.0,<10
+# Fixed installer tooling for source setup/CI; portable bootstrap wheels are checked separately.
+pip>=26.2.0,<27
+wheel>=0.46.2,<0.47

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.history import history_manager
 from app.core.events import event_generator, emit_event
+from app.core.file_security import contained_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -26,6 +27,14 @@ def _to_url_path(file_path: Optional[str]) -> Optional[str]:
         return f"/static/output/{rel.as_posix()}"
     except ValueError:
         return file_path
+
+
+def _video_url(task: dict) -> Optional[str]:
+    from urllib.parse import quote
+    path = contained_file(settings.UPLOAD_DIR, task.get('upload_path') or '')
+    if path and path.parent == settings.UPLOAD_DIR.resolve():
+        return '/video/' + quote(path.name, safe='')
+    return None
 
 
 _ALLOWED_DELETE_DIRS = (settings.UPLOAD_DIR, settings.OUTPUT_DIR, settings.TEMP_DIR)
@@ -69,6 +78,7 @@ async def list_tasks():
     """List all translation tasks."""
     tasks = history_manager.get_all_tasks()
     for task in tasks:
+        task['video_url'] = _video_url(task)
         task["transcription_path"] = _to_url_path(task.get("transcription_path"))
         task["translation_path"] = _to_url_path(task.get("translation_path"))
         task["burn_path"] = _to_url_path(task.get("burn_path"))
@@ -93,6 +103,7 @@ async def get_task_details(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     task = copy.deepcopy(task)
+    task['video_url'] = _video_url(task)
     task["transcription_path"] = _to_url_path(task.get("transcription_path"))
     task["translation_path"] = _to_url_path(task.get("translation_path"))
     task["burn_path"] = _to_url_path(task.get("burn_path"))

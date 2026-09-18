@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.history import history_manager
 from app.core.events import emit_event
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
+from app.core.file_security import validate_file_component
 from app.services.formatter_service import subtitle_formatter
 from app.services.translation_service import translation_service
 
@@ -49,7 +50,7 @@ def _resolve_fs_path(path_str: Optional[str]) -> Optional[Path]:
     try:
         resolved = target.resolve(strict=False)
         resolved.relative_to(settings.OUTPUT_DIR.resolve())
-        if resolved.exists():
+        if resolved.is_file():
             return resolved
     except (ValueError, RuntimeError, OSError):
         pass
@@ -65,14 +66,17 @@ async def translate_transcription(
     Translates an existing transcription JSON file using LLM with sliding window.
     If task_id is provided, resolves the real file path from history manager.
     """
+    validate_file_component(target_lang, 'target language')
+    if task_id:
+        validate_file_component(task_id, 'task ID')
     resolved_path = json_path
     if task_id:
         task = history_manager.get_task(task_id)
         if task and task.get("transcription_path"):
             resolved_path = task["transcription_path"]
 
-    path = Path(resolved_path)
-    if not path.exists():
+    path = _resolve_fs_path(resolved_path)
+    if path is None or path.suffix.lower() != '.json':
         raise HTTPException(
             status_code=404, detail="Transcription JSON file not found."
         )

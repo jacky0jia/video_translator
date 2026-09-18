@@ -290,6 +290,12 @@ The following local data is not committed:
 
 ## Contributing and security
 
+This Alpha is a single-user desktop application with **local access only**.
+Use the supplied launcher; LAN access, reverse proxies and public hosting are
+unsupported. Uploaded media has an 8 GiB per-file limit, and clone samples have a
+64 MiB limit. Process trusted media and keep user-installed native dependencies
+updated. See [`SECURITY.md`](SECURITY.md) for the deployment and privacy boundaries.
+
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before contributing. Report security issues privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## License and third-party software

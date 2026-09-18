@@ -5,5 +5,5 @@ echo Starting Video Translator...
 echo Open http://127.0.0.1:%APP_PORT% in your browser.
 echo.
 REM Adjust the path below if your Python/uvicorn is in a different location
-uvicorn app.main:app --host 127.0.0.1 --port %APP_PORT%
+uvicorn app.main:app --host 127.0.0.1 --port %APP_PORT% --no-proxy-headers
 pause

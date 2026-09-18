@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Harden the local-only HTTP boundary against cross-origin requests and unexpected hosts.
+- Ignore proxy headers in launchers, isolate uploaded/generated content and limit request bodies.
+- Keep original media display names while storing uploads under unique names.
+- Restrict translation files to application outputs and validate filename components.
+- Fix video suffix ranges and reject invalid seek ranges.
+- Update vulnerable frontend build dependencies and block old pip/wheel in new public builds.
+- Clarify deployment, privacy and update boundaries in the English security policy.
+
+## 0.1.0-alpha.1 - 2026-09-17
+
+- Publish the Windows x64 public core with user-installed upstream dependencies.
+- Add the English setup menu, pinned source verification and Qwen transactional installation.
+- Preserve the saved local interface language after browser and application restart.
+- Include accepted Qwen CUDA/CPU routes, Edge Chinese/English/Japanese/Korean and the RX 5700 XT Qwen Vulkan route.
+
 ## 0.1.0-alpha.0 - 2026-08-16
 
 - 公开首个源码测试版，默认翻译路线迁移到 LM Studio。

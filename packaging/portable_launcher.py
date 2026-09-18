@@ -82,7 +82,7 @@ def main() -> int:
         threading.Thread(target=open_when_ready, args=(url,), daemon=True).start()
     import uvicorn
 
-    uvicorn.run("app.main:app", app_dir=str(ROOT), host="127.0.0.1", port=port)
+    uvicorn.run("app.main:app", app_dir=str(ROOT), host="127.0.0.1", port=port, proxy_headers=False)
     return 0
 
 

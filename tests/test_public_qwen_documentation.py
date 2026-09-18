@@ -3,6 +3,29 @@ from pathlib import Path
 
 
 class PublicQwenDocumentationTests(unittest.TestCase):
+    def test_app_readmes_and_favicon_share_an_accessible_safe_logo(self):
+        import xml.etree.ElementTree as ET
+
+        root = Path(__file__).resolve().parents[1]
+        asset = "subtitle-companion.svg"
+        svg = ET.parse(root / "app/frontend/public" / asset).getroot()
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+        self.assertEqual(svg.attrib["viewBox"], "0 0 64 64")
+        self.assertEqual(svg.find("svg:title", ns).text, "Video Translator")
+        self.assertTrue(svg.find("svg:desc", ns).text.strip())
+        for element in svg.iter():
+            self.assertNotIn(element.tag.rsplit("}", 1)[-1], ("script", "foreignObject", "image"))
+            for key, value in element.attrib.items():
+                self.assertFalse(key.lower().startswith("on"))
+                if key.rsplit("}", 1)[-1] == "href":
+                    self.assertTrue(value.startswith("#"))
+        component = (root / "app/frontend/src/components/AppLogo.jsx").read_text(encoding="utf-8")
+        self.assertIn(f'src="/{asset}"', component)
+        self.assertIn('alt="Video Translator logo"', component)
+        self.assertNotIn("<svg", component)
+        for filename in ("README.md", "README.zh-CN.md", "app/frontend/index.html"):
+            self.assertIn(asset, (root / filename).read_text(encoding="utf-8"))
+
     def test_readmes_cover_current_release_and_settings_routes(self):
         from app.core.settings_schema import SETTINGS_BY_KEY
 

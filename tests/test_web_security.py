@@ -35,6 +35,7 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.app.include_router(translation.router, prefix='/api')
         self.app.add_api_route('/video/{filename}', video_stream)
         self.app.mount('/static/uploads', StaticFiles(directory=self.uploads))
+        self.app.mount('/static/output', StaticFiles(directory=self.output))
 
         @self.app.api_route('/api/probe', methods=['GET', 'POST'])
         async def probe(request: Request):
@@ -165,6 +166,18 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
                     response = await client.post('/api/translate', data={'json_path': str(outside), field: value})
                     self.assertEqual(response.status_code, 400)
             provider.assert_not_called()
+
+    async def test_output_previews_support_ranges_and_reject_missing_files(self):
+        (self.output / 'sample.srt').write_bytes(b'0123456789')
+        (self.output / 'sample.wav').write_bytes(b'RIFF0123456789')
+        (self.output / 'sample.mp4').write_bytes(b'video0123456789')
+        async with self.client() as client:
+            for name in ('sample.srt', 'sample.wav', 'sample.mp4'):
+                response = await client.get(f'/static/output/{name}', headers={'Range': 'bytes=2-5'})
+                self.assertEqual(response.status_code, 206, name)
+                self.assertEqual(response.content, (self.output / name).read_bytes()[2:6])
+                self.assertIn('sandbox', response.headers['content-security-policy'])
+            self.assertEqual((await client.get('/static/output/missing.wav')).status_code, 404)
 
     async def test_video_ranges_include_suffix_and_reject_invalid_values(self):
         (self.uploads / 'clip.mp4').write_bytes(b'0123456789')

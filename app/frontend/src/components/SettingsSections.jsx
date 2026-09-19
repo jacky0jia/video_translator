@@ -33,7 +33,6 @@ export function AboutSection({ edition = 'standard', t }) {
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-slate-500 dark:text-slate-400">{t('product')}</dt><dd>Video Translator</dd>
         <dt className="text-slate-500 dark:text-slate-400">{t('edition')}</dt><dd>{edition}</dd>
-        <dt className="text-slate-500 dark:text-slate-400">{t('author')}</dt><dd>Jacky Jia</dd>
       </dl>
     </div>
   );

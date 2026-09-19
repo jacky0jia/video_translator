@@ -153,7 +153,8 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''", processing)
         self.assertIn("onlineLanguages.includes(languageCode(targetLang))", panel)
         self.assertIn("route === 'dubbing' && !voice", panel)
-        self.assertIn("Jacky Jia", sections)
+        self.assertNotIn("Jacky Jia", sections)
+        self.assertIn("Video Translator", sections)
         self.assertIn("sourceAndTargetFont", style_controls)
 
     def test_create_task_persists_target_language_and_output_map(self):

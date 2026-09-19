@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preview exported subtitle text, dubbing audio and generated video from the task's Export panel, with bounded subtitle reads and clear missing-file feedback.
+- Remove the personal author name from the application's About panel while retaining license and contributor notices.
+
 ## 0.1.0-alpha.2 - 2026-09-18
 
 - Harden the local-only HTTP boundary against cross-origin requests and unexpected hosts.

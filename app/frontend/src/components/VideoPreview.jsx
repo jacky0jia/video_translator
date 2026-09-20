@@ -300,9 +300,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
   if (!task) {
     return (
-      <div className="bg-white dark:bg-slate-800 p-12 rounded-xl border border-dashed border-gray-200 dark:border-slate-700 text-center text-slate-400 dark:text-slate-500">
-        {t('selectTaskToPreview')}
-      </div>
+      <section className="app-panel app-preview-empty"><span className="app-step">02</span><div className="app-preview-glyph">▶</div><h2>{t('videoPreview')}</h2><p>{t('selectTaskToPreview')}</p></section>
     );
   }
 
@@ -311,7 +309,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
   return (
     <section className="app-panel p-4">
-      <h2 className="app-panel-title mb-3">{t('videoPreview')}</h2>
+      <div className="app-panel-heading"><span className="app-step">02</span><div><h2>{t('videoPreview')}</h2><p>{t('previewPanelHint')}</p></div></div>
       <div ref={wrapperRef} className={`bg-black overflow-hidden ${isIOSFullscreen ? 'fixed inset-0 z-50 flex items-center justify-center rounded-none' : 'relative rounded-lg group'}`}>
         <video ref={videoRef} className={`block ${isIOSFullscreen ? 'w-full h-full object-contain' : 'w-full'}`} controls controlsList="nofullscreen"
           playsInline

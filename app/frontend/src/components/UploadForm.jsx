@@ -89,13 +89,13 @@ export default function UploadForm({ onUpload, onUploadStart }) {
   };
 
   return (
-    <section className="app-panel p-4">
-      <h2 className="app-panel-title mb-3">{t('uploadVideo')}</h2>
+    <section className="app-panel app-import-panel p-4">
+      <div className="app-panel-heading"><span className="app-step">01</span><div><h2>{t('uploadVideo')}</h2><p>{t('importHint')}</p></div></div>
       <form onSubmit={handleSubmit} className="space-y-3">
         <div>
-          <label className="block text-sm font-medium mb-1">{t('videoFile')}</label>
-          <div className="flex items-center gap-2">
-            <label className="shrink-0 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-medium cursor-pointer transition">
+          <label className="app-field-label">{t('videoFile')}</label>
+          <div className="app-file-picker">
+            <label className="settings-secondary shrink-0 cursor-pointer">
               {t('chooseFile')}
               <input
                 type="file"
@@ -104,13 +104,13 @@ export default function UploadForm({ onUpload, onUploadStart }) {
                 className="hidden"
               />
             </label>
-            <span className="text-sm text-slate-500 dark:text-slate-400 truncate">
+            <span className="min-w-0 truncate text-sm text-slate-500 dark:text-slate-400">
               {file ? file.name : t('noFileChosen')}
             </span>
           </div>
         </div>
         <div>
-          <label htmlFor="upload-target-language" className="block text-sm font-medium mb-1">{t('targetLanguage')}</label>
+          <label htmlFor="upload-target-language" className="app-field-label">{t('targetLanguage')}</label>
           <select
             id="upload-target-language"
             value={targetLang}
@@ -131,8 +131,7 @@ export default function UploadForm({ onUpload, onUploadStart }) {
             />
           </div>
         )}
-        <button type="submit" disabled={loading}
-          className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg font-medium transition duration-200">
+        <button type="submit" disabled={loading} className="app-primary-button">
           {loading ? `${t('uploading')} ${uploadProgress > 0 ? uploadProgress + '%' : ''}` : t('upload')}
         </button>
       </form>

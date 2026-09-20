@@ -2,6 +2,7 @@
 // All task and output requests are mocked; no real media or settings are changed.
 async page => {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() => localStorage.setItem('app_lang', 'en'));
   const task = {
     task_id: 'export-preview', filename: 'sample.mp4', status: 'completed', target_lang: 'Japanese',

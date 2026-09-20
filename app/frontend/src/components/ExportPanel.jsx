@@ -134,7 +134,7 @@ export default function ExportPanel({ task }) {
   return (
     <section className="app-panel overflow-hidden">
       <div className="app-panel-header">
-        <h2>{t('exportPanel')}</h2>
+        <div className="app-panel-heading"><span className="app-step">04</span><div><h2>{t('exportPanel')}</h2><p>{t('exportPanelHint')}</p></div></div>
         <span>{items.length} {t(items.length === 1 ? 'file' : 'files')}</span>
       </div>
       <div className="space-y-2 p-3">

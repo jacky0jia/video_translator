@@ -111,9 +111,10 @@ export default function App() {
         <div className="app-window">
           <header className="app-topbar">
             <AppLogo />
-            <div className="min-w-0 text-center">
-              <strong className="block truncate text-sm font-medium sm:text-base">{currentTask?.filename || t('appName')}</strong>
-              <span className="flex items-center justify-center gap-1.5 truncate text-xs text-slate-500 dark:text-slate-400"><StatusDot status={currentTask?.status} />{currentTask ? `${currentTask.status || 'ready'} · ${currentTask.target_lang || t('legacyTask')}` : t('createTaskHint')}</span>
+            <div className="app-current-task min-w-0">
+              <span className="app-current-label">{t('workspaceLabel')}</span>
+              <strong className="block truncate text-sm font-semibold sm:text-base">{currentTask?.filename || t('workspaceTitle')}</strong>
+              <span className="flex items-center gap-1.5 truncate text-xs text-slate-500 dark:text-slate-400"><StatusDot status={currentTask?.status} />{currentTask ? `${currentTask.status || 'ready'} · ${currentTask.target_lang || t('legacyTask')}` : t('workspaceHint')}</span>
             </div>
             <div className="flex items-center gap-2">
               <IconButton label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'} onClick={toggleTheme}>

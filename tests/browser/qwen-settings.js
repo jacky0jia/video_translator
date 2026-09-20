@@ -2,6 +2,7 @@
 // All API requests are mocked; no backend configuration is changed.
 async page => {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() => localStorage.removeItem('app_lang'));
   let local = true;
   let runtimeRequests = 0;
@@ -45,6 +46,10 @@ async page => {
     await route.fulfill({ json: body });
   });
   await page.goto('http://127.0.0.1:4178');
+  await page.getByText('Your video workspace').waitFor();
+  for (const heading of ['Upload Video', 'Task List', 'Video Preview', 'Process', 'Export']) {
+    await page.getByRole('heading', { name: heading, exact: true }).waitFor();
+  }
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'System Settings' });
   await dialog.getByRole('button', { name: 'Dubbing', exact: true }).click();
@@ -88,6 +93,10 @@ async page => {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.waitForTimeout(3300);
   if (runtimeRequests !== before || installStatusRequests !== beforeInstall) throw new Error('Remote settings requested local Qwen status');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const bounds = await page.getByRole('dialog').boundingBox();
+  if (!bounds || bounds.width > 391 || bounds.x < -1) throw new Error('Settings overflows a mobile viewport');
+  await page.getByRole('dialog').getByRole('button', { name: '配音', exact: true }).click();
   await page.unrouteAll({ behavior: 'wait' });
   console.log('PASS: grouped settings, conditional providers, verified Qwen setup, persistence, remote isolation');
 }

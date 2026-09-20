@@ -75,10 +75,10 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
 
   return (
     <section className="app-panel p-4">
-      <h2 className="app-panel-title mb-3">{t('tasks')}</h2>
+      <div className="app-panel-heading"><div><h2>{t('tasks')}</h2><p>{t('taskListHint')}</p></div><span className="app-count">{tasks.length}</span></div>
       <div className="space-y-2 max-h-[34rem] overflow-y-auto pr-1">
         {tasks.length === 0 ? (
-          <p className="text-slate-400 dark:text-slate-500 text-center py-4">{t('noTasksFound')}</p>
+          <div className="app-empty-list"><span className="app-empty-icon">▤</span><strong>{t('noTasksFound')}</strong><p>{t('taskListEmptyHint')}</p></div>
         ) : (
           tasks.map(task => {
             const isHighlighted = task.task_id === highlightTaskId;
@@ -90,7 +90,7 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
                 key={task.task_id}
                 ref={el => { itemRefs.current[task.task_id] = el; }}
                 onClick={() => !isPlaceholder && onSelect(task.task_id)}
-                className={`min-w-0 max-w-full overflow-hidden rounded-xl border p-3 transition ${isPlaceholder ? 'opacity-70 cursor-default' : 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800'} ${isHighlighted ? 'ring-2 ring-indigo-500' : ''} ${isSelected ? 'border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/30' : 'border-transparent bg-slate-50 dark:bg-slate-900/35'}`}>
+                className={`app-task-card min-w-0 max-w-full overflow-hidden rounded-xl border p-3 transition ${isPlaceholder ? 'opacity-70 cursor-default' : 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800'} ${isHighlighted ? 'ring-2 ring-indigo-500' : ''} ${isSelected ? 'border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/30' : 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/35'}`}>
                 <div className="flex items-start gap-2">
                   {!isPlaceholder && (
                     <input
@@ -150,9 +150,9 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
           })
         )}
       </div>
-      <div className="flex gap-2 mt-3">
+      <div className="grid grid-cols-2 gap-2 mt-3">
         <button onClick={onRefresh}
-          className="flex-1 py-2 text-sm text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition border border-gray-200 dark:border-slate-600 rounded">
+          className="col-span-2 app-secondary-button">
           {t('refreshList')}
         </button>
         <button
@@ -160,14 +160,14 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
             if (selectedIds.size > 0) setConfirm({ type: 'batch' });
           }}
           disabled={selectedIds.size === 0}
-          className={`flex-1 py-2 text-sm rounded border transition ${selectedIds.size > 0 ? 'text-red-500 hover:text-red-600 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20' : 'text-slate-300 dark:text-slate-600 border-gray-100 dark:border-slate-700 cursor-not-allowed'}`}
+          className={`min-h-10 py-2 text-xs rounded-lg border transition ${selectedIds.size > 0 ? 'text-red-500 hover:text-red-600 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20' : 'text-slate-300 dark:text-slate-600 border-gray-100 dark:border-slate-700 cursor-not-allowed'}`}
         >
           {t('deleteSelected')}
         </button>
         <button
           onClick={() => setConfirm({ type: 'all' })}
           disabled={tasks.length === 0}
-          className={`flex-1 py-2 text-sm rounded border transition ${tasks.length > 0 ? 'text-red-500 hover:text-red-600 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20' : 'text-slate-300 dark:text-slate-600 border-gray-100 dark:border-slate-700 cursor-not-allowed'}`}
+          className={`min-h-10 py-2 text-xs rounded-lg border transition ${tasks.length > 0 ? 'text-red-500 hover:text-red-600 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20' : 'text-slate-300 dark:text-slate-600 border-gray-100 dark:border-slate-700 cursor-not-allowed'}`}
         >
           {t('deleteAll')}
         </button>

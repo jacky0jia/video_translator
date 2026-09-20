@@ -38,9 +38,9 @@ export default function ProcessPanel(props) {
   const { task } = props;
   const processing = useTaskProcessing(props);
   const { burn, cancel, format, onlineLanguages, retryFailedStage, route, run, running, setFormat, setRoute, status, targetLang, voice } = processing;
-  if (!task) return <section className="app-panel p-6 text-center text-sm text-slate-500 dark:text-slate-400">{t('selectTaskProcess')}</section>;
+  if (!task) return <section className="app-panel app-process-empty"><div className="app-panel-heading"><span className="app-step">03</span><div><h2>{t('processPanel')}</h2><p>{t('processPanelHint')}</p></div></div><p>{t('selectTaskProcess')}</p></section>;
   return <section className="app-panel overflow-hidden">
-    <div className="app-panel-header"><h2>{t('processPanel')}</h2><span className={`app-status app-status-${status}`}>{status === 'processing' ? t('processing') : status === 'completed' ? t('statusCompleted') : status === 'failed' ? t('statusFailed') : t('readyToProcess')}</span></div>
+    <div className="app-panel-header"><div className="app-panel-heading"><span className="app-step">03</span><div><h2>{t('processPanel')}</h2><p>{t('processPanelHint')}</p></div></div><span className={`app-status app-status-${status}`}>{status === 'processing' ? t('processing') : status === 'completed' ? t('statusCompleted') : status === 'failed' ? t('statusFailed') : t('readyToProcess')}</span></div>
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between rounded-xl bg-indigo-50 px-3 py-2.5 text-sm dark:bg-indigo-950/40"><span className="text-slate-500 dark:text-slate-400">{t('taskTargetLanguage')}</span><strong className="font-medium">{targetLang}</strong></div>
       <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Output type">{['subtitles', 'dubbing'].map(value => <label key={value} className={`app-choice ${route === value ? 'app-choice-active' : ''}`}><input type="radio" name="process-route" value={value} checked={route === value} onChange={() => setRoute(value)} disabled={running} /><span>{t(value === 'subtitles' ? 'subtitles' : 'dubbingLabel')}</span></label>)}</div>

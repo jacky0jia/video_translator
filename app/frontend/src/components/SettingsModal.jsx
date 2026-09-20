@@ -2,10 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { AboutSection, InterfaceSettingsSection, ServicesSection } from './SettingsSections';
 import SettingsField from './settings/SettingsField';
-import QwenRuntimeStatus from './settings/QwenRuntimeStatus';
-import SettingsSection from './settings/SettingsSection';
+import SettingsLayout from './settings/SettingsLayout';
 import { fieldIsVisible } from '../settings/visibility';
 import { pollRuntimeStatus } from '../settings/pollRuntimeStatus';
 
@@ -29,7 +27,9 @@ export default function SettingsModal({ onClose }) {
   const [schema, setSchema] = useState(null);
   const [capabilities, setCapabilities] = useState(null);
   const [schemaError, setSchemaError] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [activeSection, setActiveSection] = useState('transcription');
+  const [advancedSections, setAdvancedSections] = useState({});
+  const [qwenSetupOpen, setQwenSetupOpen] = useState(false);
   const [qwenInstall, setQwenInstall] = useState({ llama_archive: '', cuda_archive: '', model_directory: '', device: 'cuda' });
   const [qwenInstalling, setQwenInstalling] = useState(false);
   const [qwenInstallResult, setQwenInstallResult] = useState(null);
@@ -438,17 +438,20 @@ export default function SettingsModal({ onClose }) {
     config, onChange: handleChange, textMain, inputBg, inputBorder, models, fetchingModels, t, asrModelInfo, onBrowse: handleBrowse
   };
   const fieldsByKey = Object.fromEntries((schema?.fields || []).map(field => [field.key, field]));
-  const asrKeys = new Set(['ASR_MODEL_PATH', 'ASR_API_URL', 'ASR_REMOTE_MODEL', 'UI_LANGUAGE']);
-  const visibleFields = (schema?.fields || []).filter(field =>
-    !asrKeys.has(field.key)
-    && (showAdvanced || field.level !== 'advanced')
+  const hiddenKeys = new Set(['ASR_MODEL_PATH', 'ASR_API_URL', 'ASR_REMOTE_MODEL', 'UI_LANGUAGE', 'TTS_MODE', 'TTS_API_URL', 'TTS_API_KEY', 'TTS_MODEL', 'TTS_DEFAULT_VOICE', 'TTS_SPEED']);
+  const sectionFields = (section, advanced = false) => (schema?.fields || []).filter(field =>
+    field.section === section && !hiddenKeys.has(field.key)
+    && (field.level === 'advanced') === advanced
     && fieldIsVisible(field, { ...config, ASR_MODE: asrMode })
   );
-  const advancedFieldCount = (schema?.fields || []).filter(field =>
-    !asrKeys.has(field.key)
-    && field.level === 'advanced'
-    && fieldIsVisible(field, { ...config, ASR_MODE: asrMode })
-  ).length;
+  const renderFields = (fields) => fields.map(field => <SettingsField key={field.key} field={field} {...fieldProps} />);
+  const renderAdvanced = (section, exclude = []) => {
+    const fields = sectionFields(section, true).filter(field => !exclude.includes(field.key));
+    if (!fields.length) return null;
+    return <details className="settings-details" open={Boolean(advancedSections[section])} onToggle={event => setAdvancedSections(current => ({ ...current, [section]: event.currentTarget.open }))}>
+      <summary>{t('advancedSettings')}</summary><div className="settings-grid">{renderFields(fields)}</div>
+    </details>;
+  };
   const qwenNeedsCudaArchive = qwenInstall.device !== 'vulkan';
   const qwenSourcesReady = Boolean(
     qwenInstall.llama_archive
@@ -456,205 +459,15 @@ export default function SettingsModal({ onClose }) {
     && (!qwenNeedsCudaArchive || qwenInstall.cuda_archive)
   );
 
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-      onPointerDown={e => { overlayPointerDownRef.current = e.target === e.currentTarget; }}
-      onClick={e => {
-        const isOverlayClick = overlayPointerDownRef.current && e.target === e.currentTarget;
-        overlayPointerDownRef.current = false;
-        if (isOverlayClick) onClose();
-      }}>
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
-        <div className="flex justify-between items-center mb-6 border-b border-gray-200 dark:border-slate-700 pb-3">
-          <h2 className={`text-xl font-semibold ${textMain}`}>{t('settings')}</h2>
-          <button onClick={onClose} className={`${textMuted} hover:text-slate-900 dark:hover:text-white text-2xl leading-none`}>&times;</button>
-        </div>
-
-        {hardware && (
-          <div className="mb-4 p-3 bg-gray-100/50 dark:bg-slate-700/50 rounded border border-gray-200 dark:border-slate-600 text-sm text-slate-600 dark:text-slate-300">
-            {t('detected')}: {hardware[2]}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-          {isLocal && upstreamDependencies?.user_install && (
-            <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
-              <p>{t('upstreamDependenciesHint')}</p>
-              {upstreamDependencies.missing?.length > 0 && <p className="mt-1">{t('upstreamDependenciesMissing')}: {upstreamDependencies.missing.join(', ')}</p>}
-              <a className="mt-2 inline-block underline" href="/api/dependencies/install-guide" target="_blank" rel="noreferrer">{t('upstreamDependenciesGuide')}</a>
-            </div>
-          )}
-          {isLocal === false && (
-            <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-300">
-              {t('remoteSettingsHint')}
-            </div>
-          )}
-          {schemaError && (
-            <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-              {t('settingsSchemaLoadFailed')}
-            </div>
-          )}
-          <InterfaceSettingsSection lang={lang} setLanguage={setLanguage} theme={theme} setTheme={setTheme} inputBg={inputBg} inputBorder={inputBorder} textMain={textMain} />
-          <ServicesSection>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* ASR Mode Section */}
-            <div className="md:col-span-2 p-4 bg-gray-50 dark:bg-slate-700/40 rounded-lg border border-gray-200 dark:border-slate-600">
-              <label className={`block text-sm font-medium mb-2 ${textMain}`}>{t('asrMode')}</label>
-              <div className="flex gap-6 mb-4">
-                {isLocal && (
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="asrMode" checked={asrMode === 'local'} onChange={() => handleAsrModeChange('local')}
-                      className="w-4 h-4 accent-blue-600" />
-                    <span className={`text-sm ${textMain}`}>{t('asrLocalModel')}</span>
-                  </label>
-                )}
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="asrMode" checked={asrMode === 'remote'} onChange={() => handleAsrModeChange('remote')}
-                    className="w-4 h-4 accent-blue-600" disabled={!isLocal && asrMode === 'local'} />
-                  <span className={`text-sm ${textMain}`}>{t('asrRemoteApi')}</span>
-                </label>
-              </div>
-              {asrMode === 'local' && isLocal && (
-                fieldsByKey.ASR_MODEL_PATH && <SettingsField field={fieldsByKey.ASR_MODEL_PATH} {...fieldProps} />
-              )}
-              {asrMode === 'remote' && (
-                <div className="space-y-4">
-                  {fieldsByKey.ASR_API_URL && <SettingsField field={fieldsByKey.ASR_API_URL} {...fieldProps} />}
-                  {fieldsByKey.ASR_REMOTE_MODEL && <SettingsField field={fieldsByKey.ASR_REMOTE_MODEL} {...fieldProps} />}
-                  {asrModelInfo && (
-                    <p className={`text-xs ${asrModelInfo.isValid ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                      {asrModelInfo.message}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {isLocal && config.TTS_MODE === 'qwen' && (
-              <div className="md:col-span-2 space-y-3 rounded-lg border border-slate-300 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-700/30">
-                <div>
-                  <h3 className={`text-sm font-semibold ${textMain}`}>{t('qwenPrivateRuntimeInstall')}</h3>
-                  <p className={`mt-1 text-xs ${textMuted}`}>{t('qwenPrivateRuntimeInstallHint')}</p>
-                </div>
-                {qwenInstallStatus?.installed && qwenInstallStatus?.managed && (
-                  <p role="status" className="rounded border border-green-300 bg-green-50 p-2 text-sm text-green-800 dark:border-green-700 dark:bg-green-900/20 dark:text-green-200">
-                    {t('qwenCurrentlyInstalled')}: {qwenInstallStatus.runtime_version} · {qwenInstallStatus.device?.toUpperCase()} · {gib(qwenInstallStatus.installed_bytes)} GiB
-                  </p>
-                )}
-                {qwenInstallStatus?.installed && !qwenInstallStatus?.managed && (
-                  <p role="alert" className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                    {t('qwenLegacyRuntimeDetected')}
-                  </p>
-                )}
-                <QwenRuntimeStatus status={qwenRuntimeStatus} t={t} className={`text-sm ${textMuted}`} />
-                {qwenInstallStatus?.managed && !qwenRepairOpen && (
-                  <button type="button" onClick={() => setQwenRepairOpen(true)} className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
-                    {t('qwenRepairRuntime')}
-                  </button>
-                )}
-                {qwenInstallStatus !== null && (!qwenInstallStatus.managed || qwenRepairOpen) && <>
-                {qwenInstallStatus.upstream_sources && <p className={`text-xs ${textMuted}`}>{t('qwenSourcesAutofilled')}</p>}
-                {[
-                  ['llama_archive', qwenInstall.device === 'vulkan' ? 'qwenVulkanArchive' : 'qwenLlamaArchive', qwenInstall.device === 'vulkan' ? 'C:\\Downloads\\llama-b10792-bin-win-vulkan-x64.zip' : 'C:\\Downloads\\llama-b10792-bin-win-cuda-12.4-x64.zip'],
-                  ...(qwenNeedsCudaArchive ? [['cuda_archive', 'qwenCudaArchive', 'C:\\Downloads\\cudart-llama-bin-win-cuda-12.4-x64.zip']] : []),
-                  ['model_directory', 'qwenModelDirectory', 'C:\\Users\\name\\.lmstudio\\models\\...'],
-                ].map(([key, label, placeholder]) => (
-                  <label key={key} className={`block text-xs ${textMain}`}>
-                    <span className="mb-1 block font-medium">{t(label)}</span>
-                    <input
-                      type="text"
-                      value={qwenInstall[key]}
-                      placeholder={placeholder}
-                      disabled={qwenInstalling}
-                      onChange={event => updateQwenInstall(key, event.target.value)}
-                      className={`w-full rounded border px-3 py-2 text-sm ${inputBg} ${inputBorder}`}
-                    />
-                  </label>
-                ))}
-                <label className={`block text-xs ${textMain}`}>
-                  <span className="mb-1 block font-medium">{t('qwenInstallDevice')}</span>
-                  <select value={qwenInstall.device} disabled={qwenInstalling}
-                    onChange={event => updateQwenInstall('device', event.target.value)}
-                    className={`rounded border px-3 py-2 text-sm ${inputBg} ${inputBorder}`}>
-                    <option value="cuda">NVIDIA CUDA</option>
-                    <option value="vulkan">AMD Vulkan</option>
-                    <option value="cpu">CPU</option>
-                  </select>
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleQwenPreflight}
-                    disabled={qwenPreflighting || qwenInstalling || !qwenSourcesReady}
-                    aria-busy={qwenPreflighting}
-                    className="rounded border border-blue-600 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-blue-300 dark:hover:bg-slate-700">
-                    {t(qwenPreflighting ? 'qwenPreflighting' : 'qwenPreflight')}
-                  </button>
-                  <button type="button" onClick={handleQwenInstall}
-                    disabled={qwenInstalling || !qwenPreflight?.ready}
-                    aria-busy={qwenInstalling}
-                    className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
-                    {t(qwenInstalling ? 'qwenInstalling' : 'qwenInstall')}
-                  </button>
-                </div>
-                {qwenPreflight && (
-                  <p role={qwenPreflight.ready ? 'status' : 'alert'} className={`text-sm ${qwenPreflight.ready ? 'text-green-700 dark:text-green-300' : 'text-amber-700 dark:text-amber-300'}`}>
-                    {t(qwenPreflight.ready ? 'qwenPreflightReady' : 'qwenPreflightNoSpace')}: {gib(qwenPreflight.required_bytes)} GiB / {gib(qwenPreflight.free_bytes)} GiB
-                  </p>
-                )}
-                {qwenInstallResult?.installed && (
-                  <p role="status" className="text-sm text-green-700 dark:text-green-300">
-                    {t('qwenInstallReady')}: {qwenInstallResult.model} · {qwenInstallResult.device.toUpperCase()}
-                  </p>
-                )}
-                </>}
-              </div>
-            )}
-
-            {schema?.sections.map(section => (
-              <SettingsSection key={section.id} section={section} t={t}>
-                {visibleFields.filter(field => field.section === section.id).map(field => (
-                  <SettingsField key={field.key} field={field} {...fieldProps} />
-                ))}
-                {section.id === 'translation' && config.LLM_PROVIDER === 'lm_studio' && <>
-                  {lmStudioRuntimeReady === false && (
-                    <div role="alert" className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                      {t('lmStudioRuntimeMissing')}
-                    </div>
-                  )}
-                  {lmStudioStatusError && (
-                    <div role="alert" className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                      {t('lmStudioDiagnosticsUnavailable')}
-                    </div>
-                  )}
-                  <div className="md:col-span-2">
-                    <button type="button" disabled={fetchingModels} aria-busy={fetchingModels} aria-live="polite"
-                      onClick={() => setLmStudioRefreshToken(token => token + 1)}
-                      className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
-                      {fetchingModels ? t('detecting') : t('refreshLmStudioDiagnostics')}
-                    </button>
-                  </div>
-                </>}
-              </SettingsSection>
-            ))}
-            {advancedFieldCount > 0 && (
-              <div className="md:col-span-2">
-                <button type="button" aria-expanded={showAdvanced} onClick={() => setShowAdvanced(value => !value)} className={`rounded border px-3 py-2 text-sm ${inputBorder} ${inputBg} ${textMain}`}>
-                  {t(showAdvanced ? 'hideAdvancedSettings' : 'showAdvancedSettings')} ({advancedFieldCount})
-                </button>
-              </div>
-            )}
-          </div>
-          </ServicesSection>
-
-          <AboutSection edition={capabilities?.edition || 'standard'} t={t} />
-
-          <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-gray-200 dark:border-slate-700">
-            <button type="button" onClick={onClose}
-              className={`px-4 py-2 ${inputBg} hover:bg-gray-200 dark:hover:bg-slate-600 rounded text-sm transition ${textMain}`}>{t('cancel')}</button>
-            <button type="submit"
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm transition">{t('saveSettings')}</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
+  return <SettingsLayout {...{
+    t, lang, setLanguage, theme, setTheme, onClose, overlayPointerDownRef, handleSubmit,
+    hardware, isLocal, upstreamDependencies, schemaError, activeSection, setActiveSection,
+    inputBg, inputBorder, textMain, textMuted, asrMode, handleAsrModeChange, fieldsByKey,
+    fieldProps, asrModelInfo, config, handleChange, renderFields, sectionFields, renderAdvanced,
+    lmStudioRuntimeReady, lmStudioStatusError, fetchingModels, setLmStudioRefreshToken,
+    qwenInstallStatus, qwenRuntimeStatus, qwenSetupOpen, setQwenSetupOpen, qwenRepairOpen,
+    setQwenRepairOpen, qwenInstall, qwenInstalling, qwenPreflighting, qwenPreflight,
+    qwenInstallResult, qwenSourcesReady, qwenNeedsCudaArchive, updateQwenInstall,
+    handleQwenPreflight, handleQwenInstall, gib,
+  }} />;
 }

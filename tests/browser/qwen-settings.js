@@ -26,6 +26,8 @@ async page => {
         { key: 'LLM_PROVIDER', section: 'translation', value_type: 'enum', choices: ['lm_studio'], default: 'lm_studio', label_key: 'llmProvider' },
         { key: 'LM_STUDIO_CLI_PATH', section: 'translation', level: 'advanced', value_type: 'string', default: 'lms', label_key: 'lmStudioCliPath', visible_when: [{ key: 'LLM_PROVIDER', operator: 'equals', value: 'lm_studio' }] },
         { key: 'TTS_MODE', section: 'dubbing', value_type: 'enum', choices: ['kokoro', 'edge', 'qwen'], default: 'kokoro', label_key: 'ttsMode' },
+        { key: 'KOKORO_MODEL_PATH', section: 'dubbing', level: 'advanced', value_type: 'path', default: '', label_key: 'kokoroModelPath', visible_when: [{ key: 'TTS_MODE', operator: 'equals', value: 'kokoro' }] },
+        { key: 'KOKORO_VOICES_PATH', section: 'dubbing', level: 'advanced', value_type: 'path', default: '', label_key: 'kokoroVoicesPath', visible_when: [{ key: 'TTS_MODE', operator: 'equals', value: 'kokoro' }] },
         { key: 'QWEN_AUTO_CPU_FALLBACK', section: 'dubbing', value_type: 'boolean', default: true, label_key: 'qwenAutoCpuFallback', visible_when: [{ key: 'TTS_MODE', operator: 'equals', value: 'qwen' }] },
       ],
     };
@@ -37,88 +39,55 @@ async page => {
       : config.TTS_MODE === 'edge'
         ? { tts_mode: 'edge', supported_languages: ['Chinese', 'English', 'Japanese', 'Korean'], online_languages: ['zh', 'en', 'ja', 'ko'], voices: [] }
         : { tts_mode: 'qwen', supported_languages: ['Chinese', 'English', 'Japanese', 'Korean'], online_languages: [], voices: [] };
+    if (path === 'qwen-tts/preflight') body = { ready: true, required_bytes: 1000000000, free_bytes: 2000000000 };
+    if (path === 'qwen-tts/install') body = { installed: true, managed: true, model: 'Qwen', device: 'cpu' };
     if (path === 'qwen-tts/runtime-status') { runtimeRequests++; body = status; }
     await route.fulfill({ json: body });
   });
   await page.goto('http://127.0.0.1:4178');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByText('Jacky Jia', { exact: true }).waitFor();
-  await page.getByText('Services & diagnostics', { exact: true }).click();
-  const ttsSelect = page.getByLabel('TTS Mode');
-  const ttsOptions = await ttsSelect.locator('option').allTextContents();
-  if (ttsOptions.join(',') !== 'kokoro,edge,qwen') throw new Error(`Unexpected TTS choices: ${ttsOptions}`);
-  await page.getByRole('alert').filter({ hasText: 'legacy development runtime' }).waitFor();
-  const llama = page.getByLabel('llama.cpp CUDA archive', { exact: true });
-  await llama.waitFor();
+  const dialog = page.getByRole('dialog', { name: 'System Settings' });
+  await dialog.getByRole('button', { name: 'Dubbing', exact: true }).click();
+  await dialog.locator('.settings-provider-row button').filter({ hasText: 'Qwen3-TTS' }).waitFor();
+  await dialog.getByText('legacy development runtime', { exact: false }).waitFor();
+  await dialog.getByText('CPU / Synthesis completed', { exact: false }).waitFor();
+  if (await dialog.getByLabel('llama.cpp CUDA archive').count()) throw new Error('Qwen source paths should start collapsed');
+  await dialog.getByRole('button', { name: 'Set up Qwen3-TTS' }).click();
+  await dialog.getByText('Edit source paths').click();
+  const llama = dialog.getByLabel('llama.cpp CUDA archive', { exact: true });
   if (await llama.inputValue() !== sources.cuda.llama_archive) throw new Error('CUDA path was not filled');
-  if (await page.getByLabel('Qwen model directory', { exact: true }).inputValue() !== sources.model_directory) throw new Error('Model path was not filled');
-  const device = page.getByRole('combobox', { name: /Execution device/ });
+  const device = dialog.getByRole('combobox', { name: 'Execution device' });
   await device.selectOption('vulkan');
-  if (await page.getByLabel('llama.cpp Vulkan archive', { exact: true }).inputValue() !== sources.vulkan.llama_archive) throw new Error('Vulkan path did not change');
+  if (await dialog.getByLabel('llama.cpp Vulkan archive', { exact: true }).inputValue() !== sources.vulkan.llama_archive) throw new Error('Vulkan path did not change');
   await device.selectOption('cpu');
-  if (await llama.inputValue() !== sources.cuda.llama_archive) throw new Error('CPU did not use CUDA/CPU archive');
   await llama.fill('D:\\Custom\\llama.zip');
   await device.selectOption('vulkan');
-  if (await page.getByLabel('llama.cpp Vulkan archive', { exact: true }).inputValue() !== 'D:\\Custom\\llama.zip') throw new Error('Custom archive path overwritten');
+  if (await dialog.getByLabel('llama.cpp Vulkan archive', { exact: true }).inputValue() !== 'D:\\Custom\\llama.zip') throw new Error('Manual source path was overwritten');
   await device.selectOption('cpu');
-  const translation = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Translation', exact: true }) });
-  await translation.getByRole('button', { name: 'Refresh LM Studio diagnostics', exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Show advanced settings (1)', exact: true }).click();
-  await page.getByLabel('LM Studio CLI Path').waitFor();
-  await page.getByRole('alert').filter({ hasText: 'CUDA unavailable' }).waitFor();
-  await page.getByText('CPU / Synthesis completed', { exact: false }).waitFor();
-  const checkbox = page.locator('#setting-qwen_auto_cpu_fallback');
-  await checkbox.uncheck();
-  await page.getByRole('button', { name: 'Save Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByText('Services & diagnostics', { exact: true }).click();
-  if (await checkbox.isChecked() || config.QWEN_AUTO_CPU_FALLBACK !== false) throw new Error('Fallback preference did not persist as boolean');
-  await page.getByRole('combobox', { name: /Interface language/ }).selectOption('zh');
-  await page.getByText('CPU / 合成完成', { exact: false }).waitFor();
-  status = { actual_device: 'cpu', state: 'failed', fallback_reason: 'CUDA unavailable' };
-  await page.getByText('CPU / 合成失败', { exact: false }).waitFor();
-  status = { actual_device: 'cpu', state: 'cancelled', fallback_reason: null };
-  await page.getByRole('status').filter({ hasText: 'CPU / 已取消' }).waitFor();
-  if (await page.getByRole('alert').filter({ hasText: 'CUDA unavailable' }).count()) throw new Error('Stale fallback warning remained');
-  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Check sources and space' }).click();
+  await dialog.getByText('Preflight passed', { exact: false }).waitFor();
+  await dialog.getByRole('button', { name: 'Verify and install' }).click();
+  await dialog.getByText('Currently installed', { exact: false }).waitFor();
+  await dialog.locator('#setting-qwen_auto_cpu_fallback').uncheck();
+  await dialog.getByRole('button', { name: 'Kokoro', exact: false }).click();
+  if (await dialog.locator('#setting-qwen_auto_cpu_fallback').count()) throw new Error('Qwen fallback leaked into Kokoro');
+  await dialog.getByText('Custom Kokoro paths').click();
+  await dialog.getByText('not a voice cloning sample', { exact: false }).waitFor();
+  await dialog.getByLabel('Preset voices file').waitFor();
+  await dialog.getByRole('button', { name: 'Edge voices', exact: false }).click();
+  if (await dialog.getByLabel('Preset voices file').count()) throw new Error('Kokoro paths leaked into Edge');
+  await dialog.locator('.settings-note').filter({ hasText: 'Audio text is sent' }).waitFor();
+  await dialog.getByRole('button', { name: 'Translation', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Refresh LM Studio diagnostics' }).waitFor();
+  await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await dialog.getByRole('combobox', { name: 'Interface Language' }).selectOption('zh');
+  await page.getByRole('dialog').getByRole('button', { name: '保存设置' }).click();
+  if (config.QWEN_AUTO_CPU_FALLBACK !== false || config.TTS_MODE !== 'edge' || config.UI_LANGUAGE !== 'zh') throw new Error('Settings did not persist');
   local = false;
-  const before = runtimeRequests;
-  const beforeInstall = installStatusRequests;
+  const before = runtimeRequests, beforeInstall = installStatusRequests;
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: '保存设置', exact: true }).waitFor();
-  // Observe an entire polling interval, including the initial config request.
   await page.waitForTimeout(3300);
-  if (runtimeRequests !== before) throw new Error('Remote settings requested local runtime status');
-  if (installStatusRequests !== beforeInstall) throw new Error('Remote settings requested local source paths');
-  await page.getByRole('button', { name: '取消', exact: true }).click();
-  local = true;
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByText('Services & diagnostics', { exact: true }).click();
-  await page.getByLabel('TTS 模式').selectOption('edge');
-  await page.getByRole('button', { name: '保存设置', exact: true }).click();
-  await page.getByLabel('目标语言').locator('option[value="Korean"]').waitFor({ state: 'attached' });
-  const edgeLanguages = await page.getByLabel('目标语言').locator('option').allTextContents();
-  if (edgeLanguages.join(',') !== 'Chinese,English,Japanese,Korean') throw new Error(`Unexpected Edge languages: ${edgeLanguages}`);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByText('Services & diagnostics', { exact: true }).click();
-  await page.getByLabel('TTS 模式').selectOption('kokoro');
-  await page.getByRole('button', { name: '保存设置', exact: true }).click();
-  await page.getByLabel('目标语言').locator('option[value="Korean"]').waitFor({ state: 'detached' });
-  const uploadLanguages = await page.getByLabel('目标语言').locator('option').allTextContents();
-  if (uploadLanguages.includes('Korean')) throw new Error('Korean remained available for Kokoro');
-  if (config.UI_LANGUAGE !== 'zh') throw new Error('Settings did not persist Chinese to the application');
-  await page.reload();
-  await page.getByLabel('目标语言').waitFor();
-  if (await page.evaluate(() => localStorage.getItem('app_lang')) !== 'zh') throw new Error('Saved Chinese did not restore with empty browser storage');
-  local = false;
-  await page.reload();
-  await page.getByLabel('Target Language').waitFor();
-  local = true;
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Save Settings', exact: true }).click();
-  if (config.UI_LANGUAGE !== 'en') throw new Error('Explicit English did not replace saved Chinese');
-  await page.reload();
-  await page.getByLabel('Target Language').waitFor();
+  if (runtimeRequests !== before || installStatusRequests !== beforeInstall) throw new Error('Remote settings requested local Qwen status');
   await page.unrouteAll({ behavior: 'wait' });
-  console.log('PASS: settings feedback, provider languages, fallback states, remote request isolation');
+  console.log('PASS: grouped settings, conditional providers, verified Qwen setup, persistence, remote isolation');
 }

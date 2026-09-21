@@ -416,8 +416,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           </button>
         </div>
         {!subtitleCollapsed && (
-        <div className="max-h-80 overflow-y-auto border border-gray-200 dark:border-slate-700 rounded-lg overflow-x-auto">
-          <table className="w-full min-w-[28rem] text-left text-sm">
+        <div className="app-subtitle-table-wrap max-h-80 overflow-y-auto border border-gray-200 dark:border-slate-700 rounded-lg overflow-x-auto">
+          <table role="table" className="app-subtitle-table w-full min-w-[28rem] text-left text-sm">
             <thead className="bg-gray-100 dark:bg-slate-700 sticky top-0">
               <tr>
                 <th className="px-3 py-2 w-24">{t('time')}</th>
@@ -425,7 +425,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 <th className="px-3 py-2">{t('target')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-slate-700">
+            <tbody role="rowgroup" className="divide-y divide-gray-200 dark:divide-slate-700">
               {Array.from({ length: maxLen }).map((_, i) => {
                 const src = sourceSegments[i];
                 const tgt = targetSegments[i];
@@ -433,9 +433,9 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const isEditingTarget = editingCell?.index === i && editingCell?.field === 'target';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i}
+                  <tr key={i} role="row"
                     className={`${isEditingSource || isEditingTarget ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
-                    <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       {src || tgt ? (
                         <span
                           onClick={() => seekTo((src || tgt).start)}
@@ -446,7 +446,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                         </span>
                       ) : '-'}
                     </td>
-                    <td className="px-3 py-2">
+                    <td role="cell" data-label={t('source')} className="px-3 py-2">
                       {isEditingSource ? (
                         <div className="flex items-start gap-2">
                           <textarea
@@ -470,7 +470,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                         <span onClick={() => startEdit(i, 'source')} className="text-slate-800 dark:text-slate-200 cursor-pointer">{src?.text || ''}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2">
+                    <td role="cell" data-label={t('target')} className="px-3 py-2">
                       {isEditingTarget ? (
                         <div className="flex items-start gap-2">
                           <textarea

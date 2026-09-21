@@ -164,7 +164,7 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
   .app-window { min-height: 100vh; border: 0; border-radius: 0; }
   .app-topbar { grid-template-columns: auto minmax(0, 1fr) auto; padding: 8px 10px; }
   .app-topbar > :first-child span { display: none; }
-  .app-layout { display: block; padding: 10px 10px 76px; }
+  .app-layout { display: block; padding: 10px 10px 104px; }
   .app-mobile-nav { position: fixed; z-index: 40; right: 8px; bottom: 8px; left: 8px; display: grid; grid-template-columns: repeat(4, 1fr); overflow: hidden; border: 1px solid #dce4ef; border-radius: 15px; background: rgba(255, 255, 255, .95); box-shadow: 0 12px 34px rgba(31, 41, 55, .2); backdrop-filter: blur(15px); }
   .dark .app-mobile-nav { border-color: #2a394c; background: rgba(15, 27, 45, .95); }
   .app-mobile-nav button { display: grid; place-items: center; gap: 2px; min-height: 58px; color: #7a8799; font-size: .68rem; }
@@ -181,6 +181,21 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
   .app-icon-button { width: 34px; height: 34px; border-radius: 9px; }
   .app-topbar > :last-child { gap: 5px; }
   .app-workflow-empty { min-height: 300px; }
+  .app-subtitle-table-wrap { overflow-x: hidden; }
+  .app-subtitle-table { display: block; min-width: 0; width: 100%; }
+  .app-subtitle-table thead { display: none; }
+  .app-subtitle-table tbody { display: grid; gap: 8px; padding: 8px; }
+  .app-subtitle-table tbody tr { display: grid; overflow: hidden; border: 1px solid #e3e9f1; border-radius: 10px; background: #fff; }
+  .dark .app-subtitle-table tbody tr { border-color: #34455b; background: #101d2f; }
+  .app-subtitle-table tbody td { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; padding: 8px 10px; border-top: 1px solid #edf1f6; white-space: normal; overflow-wrap: anywhere; }
+  .app-subtitle-table tbody td:first-child { border-top: 0; }
+  .app-subtitle-table tbody td::before { content: attr(data-label); color: #7b879a; font-size: .68rem; font-weight: 700; text-transform: uppercase; }
+  .app-subtitle-table tbody .app-subtitle-time { display: block; padding-bottom: 7px; color: #68768a; background: #f8fafc; font-size: .7rem; }
+  .dark .app-subtitle-table tbody .app-subtitle-time { background: #142338; }
+  .app-subtitle-table tbody .app-subtitle-time::before { content: none; }
+  .app-process-body { padding: 12px; }
+  .app-process-body > :not([hidden]) ~ :not([hidden]) { margin-top: 12px; }
+  .app-process-primary { position: sticky; z-index: 5; bottom: 72px; }
 }
 
 .subtitle-overlay {

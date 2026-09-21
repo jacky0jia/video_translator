@@ -9,7 +9,7 @@ async page => {
     created_at: '2026-09-19T00:00:00', last_subtitle_format: 'srt', last_process_route: 'dubbing',
     subtitle_outputs: { srt: '/static/output/sample.srt' },
     dubbing_audio_path: '/static/output/sample.wav', dubbing_video_path: '/static/output/sample.mp4',
-    transcription_path: '/static/output/source.json', translations: {},
+    transcription_path: '/static/output/source.json', translations: { Japanese: '/static/output/target.json' },
   };
   let subtitleRequests = 0;
   let missing = false;
@@ -21,7 +21,8 @@ async page => {
         path === 'capabilities' ? { edition: 'standard' } : path === 'dubbing/voices' ? { supported_languages: ['Japanese'], voices: [] } : {};
     await route.fulfill({ json: body });
   });
-  await page.route('**/static/output/*.json', route => route.fulfill({ json: { segments: [] } }));
+  await page.route('**/static/output/source.json', route => route.fulfill({ json: { segments: [{ start: 0, end: 2, text: 'Original mobile line' }] } }));
+  await page.route('**/static/output/target.json', route => route.fulfill({ json: { segments: [{ start: 0, end: 2, text: 'Translated mobile line' }] } }));
   await page.route('**/static/output/sample.srt', async route => {
     subtitleRequests++;
     if (route.request().headers().range !== 'bytes=0-262144') throw Error('Subtitle preview did not cap its request');
@@ -58,6 +59,17 @@ async page => {
   await page.getByRole('button', { name: 'Preview Dubbed Video' }).click();
   await page.locator('video[controls][src="/static/output/sample.mp4"]').waitFor();
   await page.screenshot({ path: '.codex-test-runs/export-preview-design-20260919.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Preview' }).click();
+  await page.getByRole('button', { name: 'Expand subtitle preview' }).click();
+  await page.getByText('Translated mobile line', { exact: true }).waitFor();
+  if (await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)) throw Error('Mobile subtitle cards overflow horizontally');
+  const targetCell = page.locator('td[data-label="Target"]');
+  if (!await targetCell.isVisible()) throw Error('Target subtitle is not visible in the mobile timeline');
+  const mobileNav = page.getByRole('navigation', { name: 'Main navigation' });
+  await mobileNav.getByRole('button', { name: 'Process' }).click();
+  const [actionBox, navBox] = await Promise.all([page.locator('.app-process-primary').boundingBox(), mobileNav.boundingBox()]);
+  if (!actionBox || !navBox || actionBox.y + actionBox.height > navBox.y - 3) throw Error('Mobile process action is covered by bottom navigation');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   if (await page.getByText('Jacky Jia').count()) throw Error('Personal author name remains in About');
   await page.unrouteAll({ behavior: 'ignoreErrors' });

@@ -188,14 +188,15 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
   .app-subtitle-table tbody tr { display: grid; overflow: hidden; border: 1px solid #e3e9f1; border-radius: 10px; background: #fff; }
   .dark .app-subtitle-table tbody tr { border-color: #34455b; background: #101d2f; }
   .app-subtitle-table tbody td { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; padding: 8px 10px; border-top: 1px solid #edf1f6; white-space: normal; overflow-wrap: anywhere; }
+  .dark .app-subtitle-table tbody td { border-color: #2a394c; }
   .app-subtitle-table tbody td:first-child { border-top: 0; }
   .app-subtitle-table tbody td::before { content: attr(data-label); color: #7b879a; font-size: .68rem; font-weight: 700; text-transform: uppercase; }
   .app-subtitle-table tbody .app-subtitle-time { display: block; padding-bottom: 7px; color: #68768a; background: #f8fafc; font-size: .7rem; }
   .dark .app-subtitle-table tbody .app-subtitle-time { background: #142338; }
   .app-subtitle-table tbody .app-subtitle-time::before { content: none; }
-  .app-process-body { padding: 12px; }
+  .app-process-body { padding: 12px 12px 70px; }
   .app-process-body > :not([hidden]) ~ :not([hidden]) { margin-top: 12px; }
-  .app-process-primary { position: sticky; z-index: 5; bottom: 72px; }
+  .app-process-primary { position: fixed; z-index: 39; right: 14px; bottom: 76px; left: 14px; width: auto; box-shadow: 0 10px 24px rgba(54, 63, 160, .28); }
 }
 
 .subtitle-overlay {

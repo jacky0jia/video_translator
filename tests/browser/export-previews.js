@@ -59,7 +59,7 @@ async page => {
   await page.getByRole('button', { name: 'Preview Dubbed Video' }).click();
   await page.locator('video[controls][src="/static/output/sample.mp4"]').waitFor();
   await page.screenshot({ path: '.codex-test-runs/export-preview-design-20260919.png' });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 360, height: 800 });
   await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Preview' }).click();
   await page.getByRole('button', { name: 'Expand subtitle preview' }).click();
   await page.getByText('Translated mobile line', { exact: true }).waitFor();

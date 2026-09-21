@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../contexts/I18nContext';
+import EmptyWorkflowState from './EmptyWorkflowState';
 
 const SUBTITLE_PREVIEW_BYTES = 256 * 1024;
 
@@ -114,7 +115,7 @@ function FileIcon({ type }) {
   return <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d={path} /></svg>;
 }
 
-export default function ExportPanel({ task }) {
+export default function ExportPanel({ task, onNavigate }) {
   const { t } = useI18n();
   const format = (task?.last_subtitle_format || 'srt').toLowerCase();
   const subtitlePath = task?.subtitle_outputs?.[format];
@@ -139,7 +140,7 @@ export default function ExportPanel({ task }) {
       </div>
       <div className="space-y-2 p-3">
         {items.length === 0 ? (
-          <p className="px-2 py-5 text-center text-sm text-slate-500 dark:text-slate-400">{t('processedFilesHint')}</p>
+          <EmptyWorkflowState icon="↓" title={t(task ? 'exportWaitingTitle' : 'exportEmptyTitle')} description={t(task ? 'exportWaitingHint' : 'processedFilesHint')} action={t(task ? 'goToProcess' : 'goToTasks')} onAction={() => onNavigate?.(task ? 'process' : 'tasks')} />
         ) : items.map(item => (
           <ExportItem key={`${item.type}-${item.path}`} item={item} t={t} />
         ))}

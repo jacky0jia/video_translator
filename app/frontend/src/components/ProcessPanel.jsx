@@ -1,5 +1,6 @@
 import { useI18n } from '../contexts/I18nContext';
 import { languageCode, PROCESS_STAGES, useTaskProcessing } from '../hooks/useTaskProcessing';
+import EmptyWorkflowState from './EmptyWorkflowState';
 
 const FORMATS = ['srt', 'vtt', 'ass'];
 const STAGE_LABELS = { transcribe: 'Transcribe', translate: 'Translate', dub: 'Dub', render: 'Render' };
@@ -38,7 +39,7 @@ export default function ProcessPanel(props) {
   const { task } = props;
   const processing = useTaskProcessing(props);
   const { burn, cancel, format, onlineLanguages, retryFailedStage, route, run, running, setFormat, setRoute, status, targetLang, voice } = processing;
-  if (!task) return <section className="app-panel app-process-empty"><div className="app-panel-heading"><span className="app-step">03</span><div><h2>{t('processPanel')}</h2><p>{t('processPanelHint')}</p></div></div><p>{t('selectTaskProcess')}</p></section>;
+  if (!task) return <section className="app-panel app-process-empty"><div className="app-panel-heading"><span className="app-step">03</span><div><h2>{t('processPanel')}</h2><p>{t('processPanelHint')}</p></div></div><EmptyWorkflowState icon="＋" title={t('processEmptyTitle')} description={t('selectTaskProcess')} action={t('goToTasks')} onAction={() => props.onNavigate?.('tasks')} /></section>;
   return <section className="app-panel overflow-hidden">
     <div className="app-panel-header"><div className="app-panel-heading"><span className="app-step">03</span><div><h2>{t('processPanel')}</h2><p>{t('processPanelHint')}</p></div></div><span className={`app-status app-status-${status}`}>{status === 'processing' ? t('processing') : status === 'completed' ? t('statusCompleted') : status === 'failed' ? t('statusFailed') : t('readyToProcess')}</span></div>
     <div className="space-y-4 p-4">

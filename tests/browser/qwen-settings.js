@@ -97,6 +97,18 @@ async page => {
   const bounds = await page.getByRole('dialog').boundingBox();
   if (!bounds || bounds.width > 391 || bounds.x < -1) throw new Error('Settings overflows a mobile viewport');
   await page.getByRole('dialog').getByRole('button', { name: '配音', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).last().click();
+  const header = page.locator('.app-topbar');
+  const headerBox = await header.boundingBox();
+  const headerOverflows = await header.evaluate(element => element.scrollWidth > element.clientWidth);
+  if (!headerBox || headerBox.height > 66 || headerOverflows) throw new Error('Mobile header remains crowded or overflows');
+  const mobileNav = page.getByRole('navigation', { name: 'Main navigation' });
+  await mobileNav.getByRole('button', { name: '处理', exact: true }).click();
+  await page.getByRole('button', { name: '前往任务', exact: true }).click();
+  if (await mobileNav.getByRole('button', { name: '任务', exact: true }).getAttribute('aria-current') !== 'page') throw new Error('Process empty-state action did not open tasks');
+  await mobileNav.getByRole('button', { name: '导出', exact: true }).click();
+  await page.getByText('暂无可导出内容', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '前往任务', exact: true }).click();
   await page.unrouteAll({ behavior: 'wait' });
-  console.log('PASS: grouped settings, conditional providers, verified Qwen setup, persistence, remote isolation');
+  console.log('PASS: settings flows, remote isolation, compact mobile header and empty-state navigation');
 }

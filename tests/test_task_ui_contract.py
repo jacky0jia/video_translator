@@ -125,6 +125,9 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         processing = (root / "app/frontend/src/hooks/useTaskProcessing.js").read_text(encoding="utf-8")
         panel = (root / "app/frontend/src/components/ProcessPanel.jsx").read_text(encoding="utf-8")
         sections = (root / "app/frontend/src/components/SettingsSections.jsx").read_text(encoding="utf-8")
+        app = (root / "app/frontend/src/App.jsx").read_text(encoding="utf-8")
+        export_panel = (root / "app/frontend/src/components/ExportPanel.jsx").read_text(encoding="utf-8")
+        empty_state = (root / "app/frontend/src/components/EmptyWorkflowState.jsx").read_text(encoding="utf-8")
         style_controls = (root / "app/frontend/src/components/SubtitleStyleControls.jsx").read_text(encoding="utf-8")
 
         self.assertIn("data.supported_languages", upload)
@@ -144,6 +147,9 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("route === 'dubbing' && !voice", panel)
         self.assertNotIn("Jacky Jia", sections)
         self.assertIn("Video Translator", sections)
+        self.assertIn("onNavigate={setMobilePage}", app)
+        self.assertIn("task ? 'process' : 'tasks'", export_panel)
+        self.assertIn("onAction", empty_state)
         self.assertIn("sourceAndTargetFont", style_controls)
 
     def test_create_task_persists_target_language_and_output_map(self):

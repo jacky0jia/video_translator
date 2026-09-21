@@ -139,8 +139,8 @@ export default function App() {
             <section className={`${pageVisible('preview')} min-w-0`}><VideoPreview task={currentTask} subtitleStyle={subtitleStyle} onSubtitleStyleChange={setSubtitleStyle} showSource={showSource} showTarget={showTarget} onShowSourceChange={setShowSource} onShowTargetChange={setShowTarget} /></section>
 
             <aside className={`${rightVisible} min-w-0 flex-col gap-3 md:max-h-[calc(100vh-7.5rem)] md:overflow-y-auto`}>
-              <div className={mobilePage === 'export' ? 'hidden md:block' : 'block'}><ControlPanel task={currentTask} onTaskRefresh={refreshTask} subtitleStyle={subtitleStyle} showSource={showSource} showTarget={showTarget} /></div>
-              <div className={mobilePage === 'process' ? 'hidden md:block' : 'block'}><ExportPanel task={currentTask} /></div>
+              <div className={mobilePage === 'export' ? 'hidden md:block' : 'block'}><ControlPanel task={currentTask} onTaskRefresh={refreshTask} subtitleStyle={subtitleStyle} showSource={showSource} showTarget={showTarget} onNavigate={setMobilePage} /></div>
+              <div className={mobilePage === 'process' ? 'hidden md:block' : 'block'}><ExportPanel task={currentTask} onNavigate={setMobilePage} /></div>
             </aside>
           </main>
 

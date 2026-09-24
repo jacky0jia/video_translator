@@ -3,7 +3,10 @@
 async page => {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.addInitScript(() => localStorage.setItem('app_lang', 'en'));
+  await page.addInitScript(() => {
+    localStorage.setItem('app_lang', 'en');
+    localStorage.setItem('theme', 'dark');
+  });
   const task = {
     task_id: 'export-preview', filename: 'sample.mp4', status: 'completed', target_lang: 'Japanese',
     created_at: '2026-09-19T00:00:00', last_subtitle_format: 'srt', last_process_route: 'dubbing',
@@ -35,6 +38,24 @@ async page => {
 
   await page.goto('http://127.0.0.1:4178');
   await page.getByText('sample.mp4', { exact: true }).click();
+  const doneStageBars = page.locator('.app-stage-done > span');
+  if (await doneStageBars.count() < 3) throw Error('Completed workflow stages are missing');
+  for (const bar of await doneStageBars.all()) {
+    const background = await bar.evaluate(element => getComputedStyle(element).backgroundColor);
+    if (background !== 'rgb(16, 185, 129)') throw Error(`Dark completed stage lost its status color: ${background}`);
+  }
+  await page.getByRole('button', { name: 'Subtitle Style' }).click();
+  const boldButton = page.getByTitle('Bold');
+  const moveButton = page.getByTitle('Move subtitles up');
+  const [boldBox, moveBox] = await Promise.all([boldButton.boundingBox(), moveButton.boundingBox()]);
+  if (!boldBox || !moveBox || boldBox.width !== moveBox.width || boldBox.height !== moveBox.height) throw Error('Bold control size differs from the icon controls');
+  const fontSelect = page.getByLabel('Source & target font');
+  const fontOption = fontSelect.locator('option').first();
+  const optionColors = await fontOption.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, color: style.color };
+  });
+  if (optionColors.background !== 'rgb(20, 35, 56)' || optionColors.color !== 'rgb(237, 242, 247)') throw Error(`Dark font options are unreadable: ${JSON.stringify(optionColors)}`);
   const subtitleButton = page.getByRole('button', { name: 'Preview Japanese Subtitles' });
   if (subtitleRequests) throw Error('Subtitle fetched before preview opened');
   await subtitleButton.click();
@@ -73,5 +94,5 @@ async page => {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   if (await page.getByText('Jacky Jia').count()) throw Error('Personal author name remains in About');
   await page.unrouteAll({ behavior: 'ignoreErrors' });
-  console.log('PASS: lazy bounded subtitle preview, missing output, audio/video controls, download, author removal');
+  console.log('PASS: dark workflow stages and style controls, lazy bounded subtitle preview, missing output, audio/video controls, download, author removal');
 }

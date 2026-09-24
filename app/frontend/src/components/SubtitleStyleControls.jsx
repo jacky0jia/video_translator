@@ -31,10 +31,10 @@ export default function SubtitleStyleControls({ style = {}, onChange, fonts = []
           <label className="h-8 w-8 flex items-center justify-center cursor-pointer rounded bg-gray-100 dark:bg-slate-700 overflow-hidden" title={t('targetColor')}>
             <input type="color" value={targetColor} onChange={event => update({ targetColor: event.target.value })} className="h-10 w-10 p-0 border-0 cursor-pointer bg-transparent scale-125" />
           </label>
-          <button type="button" onClick={() => update({ bold: !bold })} title={t('bold') || 'Bold'} className={`h-8 px-2 flex items-center justify-center rounded text-xs font-bold transition ${bold ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200'}`}>B</button>
+          <button type="button" onClick={() => update({ bold: !bold })} title={t('bold') || 'Bold'} className={`h-8 w-8 flex items-center justify-center rounded text-xs font-bold transition ${bold ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200'}`}>B</button>
           <label className="flex h-8 items-center gap-2 rounded bg-gray-100 px-2 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
             <span>{t('sourceAndTargetFont')}</span>
-            <select value={fontFamily} onChange={event => update({ fontFamily: event.target.value })} aria-label={t('sourceAndTargetFont')} title={t('sourceAndTargetFont')} className="min-w-28 bg-transparent text-xs text-slate-700 dark:text-slate-200 focus:outline-none">
+            <select value={fontFamily} onChange={event => update({ fontFamily: event.target.value })} aria-label={t('sourceAndTargetFont')} title={t('sourceAndTargetFont')} className="app-font-select min-w-28 bg-transparent text-xs text-slate-700 dark:text-slate-200 focus:outline-none">
               {fontOptions.map(name => <option key={name} value={name}>{fontLabels[name] || name}</option>)}
             </select>
           </label>

@@ -129,6 +129,7 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         export_panel = (root / "app/frontend/src/components/ExportPanel.jsx").read_text(encoding="utf-8")
         empty_state = (root / "app/frontend/src/components/EmptyWorkflowState.jsx").read_text(encoding="utf-8")
         style_controls = (root / "app/frontend/src/components/SubtitleStyleControls.jsx").read_text(encoding="utf-8")
+        styles = (root / "app/frontend/src/index.css").read_text(encoding="utf-8")
 
         self.assertIn("data.supported_languages", upload)
         self.assertIn("window.addEventListener('settings-changed', loadLanguages)", upload)
@@ -151,6 +152,11 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("task ? 'process' : 'tasks'", export_panel)
         self.assertIn("onAction", empty_state)
         self.assertIn("sourceAndTargetFont", style_controls)
+        self.assertIn("h-8 w-8 flex items-center", style_controls)
+        self.assertIn("app-font-select", style_controls)
+        self.assertIn(".dark .app-stage-active > span", styles)
+        self.assertIn(".dark .app-stage-done > span", styles)
+        self.assertIn(".dark .app-font-select option", styles)
 
     def test_create_task_persists_target_language_and_output_map(self):
         with tempfile.TemporaryDirectory() as temp_dir:

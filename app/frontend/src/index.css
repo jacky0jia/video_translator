@@ -54,10 +54,16 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
 .app-stage > span { display: block; height: 5px; margin-bottom: 5px; border-radius: 4px; background: #dbe3ed; }
 .dark .app-stage > span { background: #34445a; }
 .app-stage-active { color: #4f67e8; font-weight: 600; }
-.app-stage-active > span { background: #5b6fee; }
+.app-stage-active > span, .dark .app-stage-active > span { background: #6d7cf4; box-shadow: 0 0 0 1px rgba(129, 140, 248, .2); }
 .app-stage-done { color: #059669; }
-.app-stage-done > span { background: #10b981; }
+.app-stage-done > span, .dark .app-stage-done > span { background: #10b981; }
+.dark .app-stage-active { color: #aeb8ff; }
+.dark .app-stage-done { color: #6ee7b7; }
 .app-stage-skipped { opacity: .42; text-decoration: line-through; }
+.app-font-select { color-scheme: light; }
+.app-font-select option { color: #172033; background: #fff; }
+.dark .app-font-select { color-scheme: dark; }
+.dark .app-font-select option { color: #edf2f7; background: #142338; }
 .app-status { display: inline-flex; align-items: center; gap: 5px; }
 .app-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
 .app-status-processing::before { background: #5b6fee; box-shadow: 0 0 0 4px rgba(91, 111, 238, .12); }

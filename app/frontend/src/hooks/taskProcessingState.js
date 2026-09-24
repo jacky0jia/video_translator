@@ -5,11 +5,35 @@ export const ACTIVE_TASK_STATUSES = new Set([
 ]);
 
 export function stageId(status) {
-  if (String(status).includes('transcrib')) return 'transcribe';
-  if (String(status).includes('translat')) return 'translate';
-  if (String(status).includes('dubb')) return 'dub';
-  if (String(status).includes('burn') || String(status).includes('render')) return 'render';
+  const value = String(status).toLowerCase();
+  if (value.includes('transcrib') || value === 'asr') return 'transcribe';
+  if (value.includes('translat')) return 'translate';
+  if (value.includes('dubb') || value === 'tts' || value.includes('synth')) return 'dub';
+  if (value.includes('burn') || value.includes('render')) return 'render';
   return '';
+}
+
+export function stageIdForEvent(event, currentStage = '') {
+  return stageId(event?.pipeline_stage)
+    || stageId(event?.gpu_stage)
+    || stageId(event?.status)
+    || currentStage;
+}
+
+export function completedStageIds(task, targetLang) {
+  const completed = [];
+  if (task?.transcription_path) completed.push('transcribe');
+  const translated = task?.translations?.[targetLang]
+    || (task?.target_lang === targetLang && task?.translation_path);
+  if (translated) completed.push('translate');
+  const dubbed = task?.dubbing_status === 'completed'
+    && (!task?.dubbing_target_lang || task.dubbing_target_lang === targetLang)
+    && (task?.dubbing_audio_path || task?.dubbing_video_path);
+  if (dubbed) completed.push('dub');
+  const rendered = (task?.burn_status === 'completed' && task?.burn_path)
+    || (dubbed && task?.dubbing_burn_subtitles === true && task?.dubbing_video_path);
+  if (rendered) completed.push('render');
+  return completed;
 }
 
 export const STAGE_MESSAGES = {

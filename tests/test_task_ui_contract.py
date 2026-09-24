@@ -16,7 +16,8 @@ class TaskUiContractTests(unittest.TestCase):
         script = r"""
 import assert from 'node:assert/strict';
 import {
-  deriveTaskProcessingState, retryPlanForFailure, standaloneTranscriptionCompletion,
+  completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageIdForEvent,
+  standaloneTranscriptionCompletion,
   subtitleVisibility,
 } from './src/hooks/taskProcessingState.js';
 const t = key => key;
@@ -36,6 +37,22 @@ const activeWithoutProgress = deriveTaskProcessingState({
 }, t);
 assert.equal(activeWithoutProgress.running, true);
 assert.equal(activeWithoutProgress.progress, 4);
+
+assert.equal(stageIdForEvent({status: 'switching_model', gpu_stage: 'tts'}, 'translate'), 'dub');
+assert.equal(stageIdForEvent({status: 'waiting_for_gpu', gpu_stage: 'asr'}, ''), 'transcribe');
+assert.equal(stageIdForEvent({status: 'switching_model'}, 'translate'), 'translate');
+
+assert.deepEqual(completedStageIds({transcription_path: '/source.json'}, 'Chinese'), ['transcribe']);
+assert.deepEqual(completedStageIds({
+  transcription_path: '/source.json', target_lang: 'Chinese',
+  translations: {Chinese: '/translated.json'}, dubbing_status: 'completed',
+  dubbing_target_lang: 'Chinese', dubbing_audio_path: '/dub.wav',
+  dubbing_video_path: '/dub.mp4', dubbing_burn_subtitles: true,
+}, 'Chinese'), ['transcribe', 'translate', 'dub', 'render']);
+assert.deepEqual(completedStageIds({
+  transcription_path: '/source.json', target_lang: 'Chinese',
+  translations: {Japanese: '/translated.json'},
+}, 'Chinese'), ['transcribe']);
 
 const burning = deriveTaskProcessingState({
   status: 'transcribed', burn_status: 'processing', progress_percent: 88,

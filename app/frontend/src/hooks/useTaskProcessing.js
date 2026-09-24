@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
 import {
-  deriveTaskProcessingState, retryPlanForFailure, stageId, STAGE_MESSAGES,
+  completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
+  stageIdForEvent, STAGE_MESSAGES,
   standaloneTranscriptionCompletion, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
@@ -53,6 +54,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const matchingVoices = useMemo(
     () => voices.filter(item => voiceMatches(item, targetLang)),
     [voices, targetLang],
+  );
+  const completedStages = useMemo(
+    () => completedStageIds(task, targetLang),
+    [task, targetLang],
   );
 
   useEffect(() => {
@@ -155,7 +160,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     const nextProgress = Number(event.progress_percent);
     if (Number.isFinite(nextProgress)) setProgress(nextProgress);
     const eventStage = event.pipeline_stage || event.status;
-    setCurrentStage(stageId(eventStage));
+    setCurrentStage(value => stageIdForEvent(event, value));
     if (event.message) setMessage(STAGE_MESSAGES[eventStage] || event.message);
     const transcriptionCompletion = standaloneTranscriptionCompletion(event, t);
     if (transcriptionCompletion) {
@@ -320,7 +325,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   };
 
   return {
-    burn, cancel, currentStage, format, matchingVoices, message, progress,
+    burn, cancel, completedStages, currentStage, format, matchingVoices, message, progress,
     requiredStages, retryFailedStage, route, run, running, setBurn, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
     subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,

@@ -24,13 +24,13 @@ function OutputOptions({ processing }) {
 
 function ProcessingStatus({ processing }) {
   const { t } = useI18n();
-  const { currentStage, message, progress, requiredStages, status } = processing;
+  const { completedStages, currentStage, message, progress, requiredStages, status } = processing;
   return <>
     <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
       <div className="mb-2 flex items-start justify-between gap-3"><div className="min-w-0"><strong className="block truncate text-sm font-medium">{status === 'completed' ? t('statusCompleted') : message}</strong><span className="text-xs text-slate-500 dark:text-slate-400">{currentStage ? STAGE_LABELS[currentStage] : t('selectedWorkflowStatus')}</span></div><strong className="text-sm font-medium">{progress}%</strong></div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className={`h-full rounded-full transition-all ${status === 'failed' ? 'bg-red-500' : status === 'completed' ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${progress}%` }} /></div>
     </div>
-    <div className="grid grid-cols-4 gap-1.5">{PROCESS_STAGES.map(value => { const required = requiredStages.includes(value); const active = currentStage === value; const index = requiredStages.indexOf(value); const activeIndex = requiredStages.indexOf(currentStage); const done = status === 'completed' || (activeIndex > index && index >= 0); const labelKey = value === 'transcribe' ? 'stageTranscribe' : value === 'translate' ? 'stageTranslate' : value === 'dub' ? 'stageDub' : 'stageRender'; return <div key={value} className={`app-stage ${!required ? 'app-stage-skipped' : active ? 'app-stage-active' : done ? 'app-stage-done' : ''}`}><span />{t(labelKey)}</div>; })}</div>
+    <div className="grid grid-cols-4 gap-1.5">{PROCESS_STAGES.map(value => { const required = requiredStages.includes(value); const active = currentStage === value; const index = requiredStages.indexOf(value); const activeIndex = requiredStages.indexOf(currentStage); const done = completedStages.includes(value) || status === 'completed' || (activeIndex > index && index >= 0); const labelKey = value === 'transcribe' ? 'stageTranscribe' : value === 'translate' ? 'stageTranslate' : value === 'dub' ? 'stageDub' : 'stageRender'; return <div key={value} className={`app-stage ${!required ? 'app-stage-skipped' : active ? 'app-stage-active' : done ? 'app-stage-done' : ''}`}><span />{t(labelKey)}</div>; })}</div>
   </>;
 }
 

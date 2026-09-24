@@ -448,7 +448,10 @@ export default function SettingsModal({ onClose }) {
   const renderAdvanced = (section, exclude = []) => {
     const fields = sectionFields(section, true).filter(field => !exclude.includes(field.key));
     if (!fields.length) return null;
-    return <details className="settings-details" open={Boolean(advancedSections[section])} onToggle={event => setAdvancedSections(current => ({ ...current, [section]: event.currentTarget.open }))}>
+    return <details className="settings-details" open={Boolean(advancedSections[section])} onToggle={event => {
+      const isOpen = event.currentTarget.open;
+      setAdvancedSections(current => ({ ...current, [section]: isOpen }));
+    }}>
       <summary>{t('advancedSettings')}</summary><div className="settings-grid">{renderFields(fields)}</div>
     </details>;
   };

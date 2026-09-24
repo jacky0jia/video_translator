@@ -52,6 +52,9 @@ async page => {
   }
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'System Settings' });
+  await dialog.getByText('Advanced Settings', { exact: true }).click();
+  await dialog.getByLabel('Compute Type', { exact: true }).waitFor();
+  await dialog.getByText('Advanced Settings', { exact: true }).click();
   await dialog.getByRole('button', { name: 'Dubbing', exact: true }).click();
   await dialog.locator('.settings-provider-row button').filter({ hasText: 'Qwen3-TTS' }).waitFor();
   await dialog.getByText('legacy development runtime', { exact: false }).waitFor();

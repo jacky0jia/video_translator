@@ -1,103 +1,65 @@
-import logging
-import platform
 import re
-import subprocess
 from pathlib import Path
-from fastapi import APIRouter
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
 class ScanRequest(BaseModel):
     path: str = ""
 
 
-def _tkinter_select_folder() -> str:
-    """Use tkinter to open a native folder dialog."""
+class BrowseRequest(BaseModel):
+    path: str = ""
+    mode: Literal["file", "folder"] = "file"
+
+
+def _existing_browse_directory(raw_path: str) -> Path:
+    candidate = Path(raw_path).expanduser() if raw_path else Path.cwd()
+    if candidate.is_file():
+        candidate = candidate.parent
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        root.lift()
-        path = filedialog.askdirectory(title="Select a folder")
-        root.destroy()
-        if path:
-            return str(Path(path))
-    except Exception as e:
-        logger.warning(f"tkinter folder dialog failed: {e}")
-    return ""
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail="The requested folder is unavailable") from error
+    if not resolved.is_dir():
+        raise HTTPException(status_code=400, detail="The requested path is not a folder")
+    return resolved
 
 
-def _tkinter_select_file() -> str:
-    """Use tkinter to open a native file dialog."""
+@router.post("/fs/browse")
+def browse_filesystem(request: BrowseRequest):
+    """List local folders and selectable files for the in-app path picker."""
+    directory = _existing_browse_directory(request.path)
+    entries = []
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        root.lift()
-        path = filedialog.askopenfilename(title="Select a file")
-        root.destroy()
-        if path:
-            return str(Path(path))
-    except Exception as e:
-        logger.warning(f"tkinter file dialog failed: {e}")
-    return ""
-
-
-def _zenity_select_folder() -> str:
-    try:
-        result = subprocess.run(
-            ["zenity", "--file-selection", "--directory"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return result.stdout.strip()
-    except Exception:
-        return ""
-
-
-def _zenity_select_file() -> str:
-    try:
-        result = subprocess.run(
-            ["zenity", "--file-selection"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return result.stdout.strip()
-    except Exception:
-        return ""
-
-
-@router.post("/fs/select-folder")
-def select_folder():
-    """Open a system folder browser dialog and return the selected absolute path."""
-    selected = _tkinter_select_folder()
-    if not selected and platform.system() != "Windows":
-        selected = _zenity_select_folder()
-    if not selected:
-        return {"path": None}
-    return {"path": selected}
-
-
-@router.post("/fs/select-file")
-def select_file():
-    """Open a system file browser dialog and return the selected absolute path."""
-    selected = _tkinter_select_file()
-    if not selected and platform.system() != "Windows":
-        selected = _zenity_select_file()
-    if not selected:
-        return {"path": None}
-    return {"path": selected}
+        children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+        for child in children[:1000]:
+            try:
+                is_directory = child.is_dir()
+                if not is_directory and (request.mode != "file" or not child.is_file()):
+                    continue
+                entries.append({
+                    "name": child.name,
+                    "path": str(child),
+                    "is_directory": is_directory,
+                })
+            except OSError:
+                continue
+    except OSError as error:
+        raise HTTPException(status_code=403, detail="This folder cannot be read") from error
+    parent = directory.parent
+    return {
+        "current_path": str(directory),
+        "parent_path": None if parent == directory else str(parent),
+        "entries": entries,
+        "truncated": len(entries) >= 1000,
+    }
 
 
 def _extract_size(name: str) -> str:

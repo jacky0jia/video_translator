@@ -43,6 +43,13 @@ async page => {
     if (path === 'qwen-tts/preflight') body = { ready: true, required_bytes: 1000000000, free_bytes: 2000000000 };
     if (path === 'qwen-tts/install') body = { installed: true, managed: true, model: 'Qwen', device: 'cpu' };
     if (path === 'qwen-tts/runtime-status') { runtimeRequests++; body = status; }
+    if (path === 'fs/browse') body = {
+      current_path: 'C:\\Models', parent_path: 'C:\\', truncated: false,
+      entries: [
+        { name: 'kokoro-v1.0.onnx', path: 'C:\\Models\\kokoro-v1.0.onnx', is_directory: false },
+        { name: 'voices-v1.0.bin', path: 'C:\\Models\\voices-v1.0.bin', is_directory: false },
+      ],
+    };
     await route.fulfill({ json: body });
   });
   await page.goto('http://127.0.0.1:4178');
@@ -88,7 +95,20 @@ async page => {
   if (await dialog.locator('#setting-qwen_auto_cpu_fallback').count()) throw new Error('Qwen fallback leaked into Kokoro');
   await dialog.getByText('Custom Kokoro paths').click();
   await dialog.getByText('not a voice cloning sample', { exact: false }).waitFor();
-  await dialog.getByLabel('Preset voices file').waitFor();
+  const kokoroModelPath = dialog.getByLabel('Kokoro Model Path', { exact: true });
+  const kokoroVoicesPath = dialog.getByLabel('Preset voices file', { exact: true });
+  await kokoroVoicesPath.waitFor();
+  const browseButtons = dialog.getByRole('button', { name: 'Browse', exact: true });
+  await browseButtons.nth(0).click();
+  let pathPicker = page.getByRole('dialog', { name: 'Choose File', exact: true });
+  await pathPicker.getByRole('button', { name: 'kokoro-v1.0.onnx', exact: true }).click();
+  await pathPicker.getByRole('button', { name: 'Use selected file', exact: true }).click();
+  await browseButtons.nth(1).click();
+  pathPicker = page.getByRole('dialog', { name: 'Choose File', exact: true });
+  await pathPicker.getByRole('button', { name: 'voices-v1.0.bin', exact: true }).click();
+  await pathPicker.getByRole('button', { name: 'Use selected file', exact: true }).click();
+  if (await kokoroModelPath.inputValue() !== 'C:\\Models\\kokoro-v1.0.onnx') throw new Error('Kokoro model browse did not update its path');
+  if (await kokoroVoicesPath.inputValue() !== 'C:\\Models\\voices-v1.0.bin') throw new Error('Kokoro voices browse did not update its path');
   await dialog.getByRole('button', { name: 'Edge voices', exact: false }).click();
   if (await dialog.getByLabel('Preset voices file').count()) throw new Error('Kokoro paths leaked into Edge');
   await dialog.locator('.settings-note').filter({ hasText: 'Audio text is sent' }).waitFor();

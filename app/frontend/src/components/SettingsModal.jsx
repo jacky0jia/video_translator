@@ -4,6 +4,7 @@ import { useI18n } from '../contexts/I18nContext';
 import { useTheme } from '../contexts/ThemeContext';
 import SettingsField from './settings/SettingsField';
 import SettingsLayout from './settings/SettingsLayout';
+import PathPickerDialog from './settings/PathPickerDialog';
 import { fieldIsVisible } from '../settings/visibility';
 import { pollRuntimeStatus } from '../settings/pollRuntimeStatus';
 
@@ -28,6 +29,7 @@ export default function SettingsModal({ onClose }) {
   const [capabilities, setCapabilities] = useState(null);
   const [schemaError, setSchemaError] = useState(false);
   const [activeSection, setActiveSection] = useState('transcription');
+  const [pathPicker, setPathPicker] = useState(null);
   const [qwenSetupOpen, setQwenSetupOpen] = useState(false);
   const [qwenInstall, setQwenInstall] = useState({ llama_archive: '', cuda_archive: '', model_directory: '', device: 'cuda' });
   const [qwenInstalling, setQwenInstalling] = useState(false);
@@ -325,27 +327,17 @@ export default function SettingsModal({ onClose }) {
     }
   };
 
-  const handleBrowse = async (key) => {
-    const endpoint = key === 'ASR_MODEL_PATH' ? '/api/fs/select-file' : '/api/fs/select-file';
-    try {
-      const res = await fetch(endpoint, { method: 'POST' });
-      const data = await res.json();
-      if (data.path) {
-        let finalPath = data.path;
-        if (key === 'ASR_MODEL_PATH') {
-          // User selected a file (e.g. model.bin); use its parent directory
-          const lastSep = Math.max(data.path.lastIndexOf('\\'), data.path.lastIndexOf('/'));
-          finalPath = lastSep > 0 ? data.path.substring(0, lastSep) : data.path;
-        }
-        if (key === 'ASR_MODEL_PATH') asrDraftsRef.current.localPath = finalPath;
-        setConfig(prev => ({ ...prev, [key]: finalPath }));
-        if (key === 'ASR_MODEL_PATH' && asrMode === 'local') {
-          validateAsrPath(finalPath);
-        }
-      }
-    } catch (e) {
-      console.error('Browse failed:', e);
-    }
+  const handleBrowse = key => {
+    setPathPicker({ key, mode: key === 'ASR_MODEL_PATH' ? 'folder' : 'file', initialPath: config[key] || '' });
+  };
+
+  const handlePathSelected = path => {
+    const key = pathPicker?.key;
+    if (!key) return;
+    if (key === 'ASR_MODEL_PATH') asrDraftsRef.current.localPath = path;
+    setConfig(prev => ({ ...prev, [key]: path }));
+    if (key === 'ASR_MODEL_PATH' && asrMode === 'local') validateAsrPath(path);
+    setPathPicker(null);
   };
 
   const handleSubmit = async (e) => {
@@ -458,7 +450,7 @@ export default function SettingsModal({ onClose }) {
     && (!qwenNeedsCudaArchive || qwenInstall.cuda_archive)
   );
 
-  return <SettingsLayout {...{
+  return <><SettingsLayout {...{
     t, lang, setLanguage, theme, setTheme, onClose, overlayPointerDownRef, handleSubmit,
     hardware, isLocal, upstreamDependencies, schemaError, activeSection, setActiveSection,
     inputBg, inputBorder, textMain, textMuted, asrMode, handleAsrModeChange, fieldsByKey,
@@ -468,5 +460,5 @@ export default function SettingsModal({ onClose }) {
     setQwenRepairOpen, qwenInstall, qwenInstalling, qwenPreflighting, qwenPreflight,
     qwenInstallResult, qwenSourcesReady, qwenNeedsCudaArchive, updateQwenInstall,
     handleQwenPreflight, handleQwenInstall, gib,
-  }} />;
+  }} />{pathPicker && <PathPickerDialog picker={pathPicker} onCancel={() => setPathPicker(null)} onSelect={handlePathSelected} t={t} />}</>;
 }

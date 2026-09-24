@@ -95,6 +95,7 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         root = Path(__file__).resolve().parents[1]
         modal = (root / "app/frontend/src/components/SettingsModal.jsx").read_text(encoding="utf-8")
         layout = (root / "app/frontend/src/components/settings/SettingsLayout.jsx").read_text(encoding="utf-8")
+        picker = (root / "app/frontend/src/components/settings/PathPickerDialog.jsx").read_text(encoding="utf-8")
         translations = (root / "app/frontend/src/i18n/translations.js").read_text(encoding="utf-8")
 
         for category in ("transcription", "translation", "dubbing", "video", "appearance"):
@@ -115,6 +116,10 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("setLmStudioRuntimeReady(null)", modal)
         self.assertIn("data.healthy === false", modal)
         self.assertIn("data.runtime_ready ?? null", modal)
+        self.assertIn("setPathPicker({ key, mode: key === 'ASR_MODEL_PATH' ? 'folder' : 'file'", modal)
+        self.assertIn("<PathPickerDialog", modal)
+        self.assertIn("fetch('/api/fs/browse'", picker)
+        self.assertIn("useSelectedFile", picker)
         self.assertNotIn("advancedSections", modal)
         self.assertNotIn("onToggle=", modal)
         self.assertIn('return <details className="settings-details">', modal)

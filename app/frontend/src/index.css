@@ -147,6 +147,23 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
 .dark .settings-details { border-color: #34455b; }
 .settings-details summary { cursor: pointer; color: #4d48aa; font-size: .82rem; font-weight: 700; }
 .settings-details .settings-card-hint { margin: 10px 0 0; }
+.settings-path-overlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(15, 23, 42, .56); backdrop-filter: blur(3px); }
+.settings-path-dialog { display: flex; width: min(720px, 100%); max-height: min(680px, calc(100vh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid #d8e0eb; border-radius: 18px; background: #fff; color: #172033; box-shadow: 0 24px 70px rgba(15, 23, 42, .28); }
+.dark .settings-path-dialog { border-color: #34455b; background: #0d1b2d; color: #edf2f7; }
+.settings-path-dialog > header, .settings-path-dialog > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; }
+.settings-path-dialog > header { border-bottom: 1px solid #e3e9f1; }
+.settings-path-dialog > footer { justify-content: flex-end; border-top: 1px solid #e3e9f1; }
+.dark .settings-path-dialog > header, .dark .settings-path-dialog > footer { border-color: #34455b; }
+.settings-path-dialog h3 { margin: 2px 0 0; font-size: 1.05rem; }
+.settings-path-toolbar { display: flex; gap: 8px; padding: 14px 18px; border-bottom: 1px solid #e3e9f1; }
+.dark .settings-path-toolbar { border-color: #34455b; }
+.settings-path-toolbar form { display: flex; min-width: 0; flex: 1; gap: 8px; }
+.settings-path-list { min-height: 240px; flex: 1; overflow: auto; padding: 8px; }
+.settings-path-entry { display: flex; width: 100%; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 9px 11px; background: transparent; color: inherit; text-align: left; }
+.settings-path-entry:hover, .settings-path-entry.is-selected { background: #eef2ff; color: #4338ca; }
+.dark .settings-path-entry:hover, .dark .settings-path-entry.is-selected { background: #26345f; color: #c7d2fe; }
+.settings-path-empty { padding: 34px 12px; color: #64748b; text-align: center; }
+.dark .settings-path-empty { color: #94a3b8; }
 .settings-runtime { margin-top: 16px; }
 .settings-setup { margin-top: 14px; padding: 15px; border: 1px solid #dce4ef; border-radius: 12px; }
 .settings-setup label { display: block; color: inherit; font-size: .78rem; font-weight: 600; }

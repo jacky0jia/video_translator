@@ -102,8 +102,8 @@ export default function App() {
     await fetchTasks();
   };
 
-  const pageVisible = page => mobilePage === page ? 'block' : 'hidden md:block';
-  const rightVisible = mobilePage === 'process' || mobilePage === 'export' ? 'flex' : 'hidden md:flex';
+  const pageVisible = page => mobilePage === page ? 'block' : 'hidden lg:block';
+  const rightVisible = mobilePage === 'process' || mobilePage === 'export' ? 'flex' : 'hidden lg:flex';
 
   return (
     <div className={theme === 'dark' ? 'dark' : ''}>
@@ -126,7 +126,7 @@ export default function App() {
           </header>
 
           <main className="app-layout">
-            <aside className={`${pageVisible('tasks')} min-w-0 space-y-3 md:max-h-[calc(100vh-7.5rem)] md:overflow-y-auto`}>
+            <aside data-page="tasks" className={`${pageVisible('tasks')} min-w-0 space-y-3 lg:max-h-[calc(100vh-7.5rem)] lg:overflow-y-auto`}>
               <UploadForm onUploadStart={(filename, targetLang) => {
                 const placeholder = { task_id: `pending-${Date.now()}`, filename, target_lang: targetLang, status: 'uploading', progress_percent: 0, created_at: new Date().toISOString() };
                 setTasks(previous => [placeholder, ...previous]);
@@ -136,11 +136,11 @@ export default function App() {
               <HistoryList tasks={tasks} onSelect={loadTask} onRefresh={fetchTasks} onRetry={retryTask} onDelete={ids => { setTasks(previous => previous.filter(item => !ids.includes(item.task_id))); if (ids.includes(currentTask?.task_id)) setCurrentTask(null); }} onDeleteAll={() => { setTasks([]); setCurrentTask(null); }} highlightTaskId={highlightTaskId} selectedTaskId={currentTask?.task_id} />
             </aside>
 
-            <section className={`${pageVisible('preview')} min-w-0`}><VideoPreview task={currentTask} subtitleStyle={subtitleStyle} onSubtitleStyleChange={setSubtitleStyle} showSource={showSource} showTarget={showTarget} onShowSourceChange={setShowSource} onShowTargetChange={setShowTarget} /></section>
+            <section data-page="preview" className={`${pageVisible('preview')} min-w-0`}><VideoPreview task={currentTask} subtitleStyle={subtitleStyle} onSubtitleStyleChange={setSubtitleStyle} showSource={showSource} showTarget={showTarget} onShowSourceChange={setShowSource} onShowTargetChange={setShowTarget} /></section>
 
-            <aside className={`${rightVisible} min-w-0 flex-col gap-3 md:max-h-[calc(100vh-7.5rem)] md:overflow-y-auto`}>
-              <div className={mobilePage === 'export' ? 'hidden md:block' : 'block'}><ControlPanel task={currentTask} onTaskRefresh={refreshTask} subtitleStyle={subtitleStyle} showSource={showSource} showTarget={showTarget} onNavigate={setMobilePage} /></div>
-              <div className={mobilePage === 'process' ? 'hidden md:block' : 'block'}><ExportPanel task={currentTask} onNavigate={setMobilePage} /></div>
+            <aside className={`${rightVisible} min-w-0 flex-col gap-3 lg:max-h-[calc(100vh-7.5rem)] lg:overflow-y-auto`}>
+              <div data-page="process" className={mobilePage === 'export' ? 'hidden lg:block' : 'block'}><ControlPanel task={currentTask} onTaskRefresh={refreshTask} subtitleStyle={subtitleStyle} showSource={showSource} showTarget={showTarget} onNavigate={setMobilePage} /></div>
+              <div data-page="export" className={mobilePage === 'process' ? 'hidden lg:block' : 'block'}><ExportPanel task={currentTask} onNavigate={setMobilePage} /></div>
             </aside>
           </main>
 

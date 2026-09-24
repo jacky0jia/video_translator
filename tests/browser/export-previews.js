@@ -80,6 +80,15 @@ async page => {
   await page.getByRole('button', { name: 'Preview Dubbed Video' }).click();
   await page.locator('video[controls][src="/static/output/sample.mp4"]').waitFor();
   await page.screenshot({ path: '.codex-test-runs/export-preview-design-20260919.png' });
+  await page.setViewportSize({ width: 872, height: 918 });
+  const tabletNav = page.getByRole('navigation', { name: 'Main navigation' });
+  for (const [label, visiblePage] of [['Tasks', 'tasks'], ['Preview', 'preview'], ['Process', 'process'], ['Export', 'export']]) {
+    await tabletNav.getByRole('button', { name: label, exact: true }).click();
+    for (const pageName of ['tasks', 'preview', 'process', 'export']) {
+      const visible = await page.locator(`[data-page="${pageName}"]`).isVisible();
+      if (visible !== (pageName === visiblePage)) throw Error(`${label} navigation did not isolate ${visiblePage} at tablet width`);
+    }
+  }
   await page.setViewportSize({ width: 360, height: 800 });
   await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Preview' }).click();
   await page.getByRole('button', { name: 'Expand subtitle preview' }).click();

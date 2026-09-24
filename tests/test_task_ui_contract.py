@@ -150,6 +150,12 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("setVoices([])", processing)
         self.assertIn("cache: 'no-store'", upload)
         self.assertIn("controller?.abort()", upload)
+        self.assertIn("'hidden lg:block'", app)
+        self.assertIn("'hidden lg:flex'", app)
+        self.assertNotIn("'hidden md:block'", app)
+        self.assertNotIn("'hidden md:flex'", app)
+        for page in ("tasks", "preview", "process", "export"):
+            self.assertIn(f'data-page="{page}"', app)
         self.assertIn("if (ttsMode === 'qwen') setSpeed(1)", processing)
         self.assertIn("onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''", processing)
         self.assertIn("onlineLanguages.includes(languageCode(targetLang))", panel)

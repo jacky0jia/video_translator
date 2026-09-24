@@ -63,7 +63,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   useEffect(() => {
     let active = true;
     let controller;
+    let requestId = 0;
     const loadVoices = () => {
+      const currentRequestId = ++requestId;
       controller?.abort();
       controller = new AbortController();
       setVoices([]);
@@ -72,7 +74,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       return fetch('/api/dubbing/voices', { cache: 'no-store', signal: controller.signal })
       .then(res => res.ok ? res.json() : Promise.reject())
       .then(data => {
-        if (!active) return;
+        if (!active || currentRequestId !== requestId) return;
         setVoices(data.voices || []);
         setTtsMode(data.tts_mode || '');
         setOnlineLanguages(data.online_languages || []);
@@ -80,7 +82,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       })
       .catch(error => {
         if (error?.name === 'AbortError') return;
-        if (!active) return;
+        if (!active || currentRequestId !== requestId) return;
         setVoices([]);
         setVoiceError(t('voiceCatalogUnavailable'));
       });
@@ -89,6 +91,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     window.addEventListener('settings-changed', loadVoices);
     return () => {
       active = false;
+      requestId += 1;
       controller?.abort();
       window.removeEventListener('settings-changed', loadVoices);
     };

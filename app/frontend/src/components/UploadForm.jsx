@@ -15,13 +15,15 @@ export default function UploadForm({ onUpload, onUploadStart }) {
   useEffect(() => {
     let active = true;
     let controller;
+    let requestId = 0;
     const loadLanguages = () => {
+      const currentRequestId = ++requestId;
       controller?.abort();
       controller = new AbortController();
       return fetch('/api/dubbing/voices', { cache: 'no-store', signal: controller.signal })
       .then(response => response.ok ? response.json() : Promise.reject(new Error('voices')))
       .then(data => {
-        if (!active || !Array.isArray(data.supported_languages) || !data.supported_languages.length) return;
+        if (!active || currentRequestId !== requestId || !Array.isArray(data.supported_languages) || !data.supported_languages.length) return;
         setSupportedLanguages(data.supported_languages);
         setTargetLang(current => data.supported_languages.includes(current) ? current : data.supported_languages[0]);
       })
@@ -31,6 +33,7 @@ export default function UploadForm({ onUpload, onUploadStart }) {
     window.addEventListener('settings-changed', loadLanguages);
     return () => {
       active = false;
+      requestId += 1;
       controller?.abort();
       window.removeEventListener('settings-changed', loadLanguages);
     };

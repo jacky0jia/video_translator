@@ -94,6 +94,10 @@ async page => {
   await dialog.locator('.settings-note').filter({ hasText: 'Audio text is sent' }).waitFor();
   await dialog.getByRole('button', { name: 'Translation', exact: true }).click();
   await dialog.getByRole('button', { name: 'Refresh LM Studio diagnostics' }).waitFor();
+  await dialog.getByRole('button', { name: 'Video & subtitles', exact: true }).click();
+  await dialog.getByText('Advanced Settings', { exact: true }).click();
+  await dialog.getByLabel('Chunking Threshold (minutes)', { exact: true }).waitFor();
+  await dialog.getByText('Advanced Settings', { exact: true }).click();
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
   await dialog.getByRole('combobox', { name: 'Interface Language' }).selectOption('zh');
   await page.getByRole('dialog').getByRole('button', { name: '保存设置' }).click();

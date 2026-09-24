@@ -28,7 +28,6 @@ export default function SettingsModal({ onClose }) {
   const [capabilities, setCapabilities] = useState(null);
   const [schemaError, setSchemaError] = useState(false);
   const [activeSection, setActiveSection] = useState('transcription');
-  const [advancedSections, setAdvancedSections] = useState({});
   const [qwenSetupOpen, setQwenSetupOpen] = useState(false);
   const [qwenInstall, setQwenInstall] = useState({ llama_archive: '', cuda_archive: '', model_directory: '', device: 'cuda' });
   const [qwenInstalling, setQwenInstalling] = useState(false);
@@ -448,10 +447,7 @@ export default function SettingsModal({ onClose }) {
   const renderAdvanced = (section, exclude = []) => {
     const fields = sectionFields(section, true).filter(field => !exclude.includes(field.key));
     if (!fields.length) return null;
-    return <details className="settings-details" open={Boolean(advancedSections[section])} onToggle={event => {
-      const isOpen = event.currentTarget.open;
-      setAdvancedSections(current => ({ ...current, [section]: isOpen }));
-    }}>
+    return <details className="settings-details">
       <summary>{t('advancedSettings')}</summary><div className="settings-grid">{renderFields(fields)}</div>
     </details>;
   };

@@ -55,6 +55,10 @@ async page => {
   await dialog.getByText('Advanced Settings', { exact: true }).click();
   await dialog.getByLabel('Compute Type', { exact: true }).waitFor();
   await dialog.getByText('Advanced Settings', { exact: true }).click();
+  await dialog.getByRole('button', { name: 'Translation', exact: true }).click();
+  await dialog.getByText('Advanced Settings', { exact: true }).click();
+  await dialog.getByLabel('LM Studio CLI Path', { exact: true }).waitFor();
+  await dialog.getByText('Advanced Settings', { exact: true }).click();
   await dialog.getByRole('button', { name: 'Dubbing', exact: true }).click();
   await dialog.locator('.settings-provider-row button').filter({ hasText: 'Qwen3-TTS' }).waitFor();
   await dialog.getByText('legacy development runtime', { exact: false }).waitFor();

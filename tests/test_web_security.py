@@ -46,6 +46,14 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
         async def index():
             return {'ok': True}
 
+        @self.app.api_route('/assets/app.js', methods=['GET', 'HEAD', 'POST'])
+        async def frontend_asset():
+            return {'asset': True}
+
+        @self.app.get('/subtitle-companion.svg')
+        async def frontend_logo():
+            return {'logo': True}
+
     def client(self, host='127.0.0.1', url='http://127.0.0.1:8769'):
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app, client=(host, 1234)), base_url=url)
 
@@ -89,6 +97,20 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
             headers = {'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate'}
             self.assertEqual((await client.get('/', headers=headers)).status_code, 200)
             self.assertEqual((await client.get('/api/probe', headers=headers)).status_code, 403)
+
+    async def test_desktop_webview_can_load_public_shell_but_not_privileged_paths(self):
+        async with self.client() as client:
+            for fetch_site in ('cross-site', 'same-site'):
+                headers = {'Sec-Fetch-Site': fetch_site, 'Sec-Fetch-Mode': 'no-cors'}
+                self.assertEqual((await client.get('/assets/app.js', headers=headers)).status_code, 200)
+                self.assertEqual((await client.head('/assets/app.js', headers=headers)).status_code, 200)
+                self.assertEqual((await client.get('/subtitle-companion.svg', headers=headers)).status_code, 200)
+                self.assertEqual((await client.post('/assets/app.js', headers=headers)).status_code, 403)
+                for path in ('/api/probe', '/video/example.mp4', '/static/output/example.srt'):
+                    self.assertEqual((await client.get(path, headers=headers)).status_code, 403)
+
+            traversal = {'Sec-Fetch-Site': 'cross-site'}
+            self.assertEqual((await client.get('/assets/../api/probe', headers=traversal)).status_code, 403)
 
     async def test_declared_and_chunked_body_limits_are_enforced(self):
         async with self.client() as client:

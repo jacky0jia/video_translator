@@ -9,6 +9,17 @@ from starlette.responses import JSONResponse
 from app.core.file_security import MAX_CLONE_BYTES, MAX_MEDIA_BYTES
 
 
+def _is_public_shell_request(path: str, method: str) -> bool:
+    """Allow the read-only files required to render an explicitly opened UI."""
+    if method not in ('GET', 'HEAD'):
+        return False
+    if path in ('/', '/subtitle-companion.svg'):
+        return True
+    if not path.startswith('/assets/'):
+        return False
+    return all(part not in ('', '.', '..') for part in path.removeprefix('/assets/').split('/'))
+
+
 def _origin(value: str, *, referer: bool = False) -> tuple[str, str, int] | None:
     try:
         url = urlsplit(value)
@@ -71,9 +82,10 @@ class LocalWebSecurityMiddleware:
                 return
         fetch_site = headers.get('sec-fetch-site', '')
         if fetch_site in ('cross-site', 'same-site'):
-            # A normal top-level visit may open the UI; it cannot call a privileged API.
-            navigation = path == '/' and scope['method'] in ('GET', 'HEAD') and headers.get('sec-fetch-mode') == 'navigate'
-            if not navigation:
+            # Some desktop webviews keep the opener's fetch-site classification for
+            # the UI subresources. Only the immutable public shell may load in that
+            # case; APIs and user media remain unavailable to another site.
+            if not _is_public_shell_request(path, scope['method']):
                 await reject(403, 'Cross-origin requests are not allowed')
                 return
 

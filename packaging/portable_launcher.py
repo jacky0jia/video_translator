@@ -5,14 +5,17 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import secrets
 import socket
 import threading
 import time
+from urllib.parse import urlencode
 import urllib.request
 import webbrowser
 
 
 ROOT = Path(__file__).resolve().parent
+SESSION_TOKEN_ENV = "VIDEO_TRANSLATOR_SESSION_TOKEN"
 
 
 def validate_port(port: int) -> int:
@@ -65,6 +68,13 @@ def prepare_environment(root: Path = ROOT) -> None:
     os.environ["PATH"] = os.pathsep.join(map(str, additions)) + os.pathsep + os.environ.get("PATH", "")
 
 
+def create_launch_session(port: int) -> str:
+    """Create the one-time URL used to establish this portable run's browser session."""
+    token = secrets.token_urlsafe(32)
+    os.environ[SESSION_TOKEN_ENV] = token
+    return f"http://127.0.0.1:{port}/?{urlencode({'session': token})}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Video Translator from its portable directory")
     parser.add_argument("--port", type=int, default=int(os.environ.get("APP_PORT", "8769")))
@@ -74,12 +84,13 @@ def main() -> int:
     port = validate_port(args.port)
     prepare_environment()
     url = f"http://127.0.0.1:{port}/"
+    launch_url = create_launch_session(port)
     print(f"Video Translator portable: {url}", flush=True)
     print("Press Ctrl+C to stop the application.", flush=True)
     if (ROOT / 'upstream-dependencies.json').is_file():
         print('Install external dependencies separately. Read README-PORTABLE.md before first use.', flush=True)
     if not args.no_browser:
-        threading.Thread(target=open_when_ready, args=(url,), daemon=True).start()
+        threading.Thread(target=open_when_ready, args=(launch_url,), daemon=True).start()
     import uvicorn
 
     uvicorn.run("app.main:app", app_dir=str(ROOT), host="127.0.0.1", port=port, proxy_headers=False)

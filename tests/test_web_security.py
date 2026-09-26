@@ -30,7 +30,8 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
             mock.start()
             self.addCleanup(mock.stop)
         self.app = FastAPI()
-        self.app.add_middleware(LocalWebSecurityMiddleware)
+        self.session_token = 'portable-session-test-token'
+        self.app.add_middleware(LocalWebSecurityMiddleware, session_token=self.session_token)
         self.app.include_router(transcribe.router, prefix='/api')
         self.app.include_router(translation.router, prefix='/api')
         self.app.add_api_route('/video/{filename}', video_stream)
@@ -128,6 +129,37 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await client.post('/assets/app.js', headers=headers)).status_code, 403)
                     for path in ('/api/probe', '/video/example.mp4', '/static/output/example.srt'):
                         self.assertEqual((await client.get(path, headers=headers)).status_code, 403)
+
+    async def test_portable_launch_session_authorizes_the_opened_browser_only(self):
+        opener_headers = {'Origin': 'null', 'Sec-Fetch-Site': 'cross-site'}
+        async with self.client() as client:
+            response = await client.get(
+                '/', params={'session': self.session_token}, headers=opener_headers,
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers['location'], '/')
+            cookie = response.headers['set-cookie'].lower()
+            self.assertIn('httponly', cookie)
+            self.assertIn('samesite=strict', cookie)
+            self.assertNotIn(self.session_token, response.headers['location'])
+            self.assertEqual((await client.get('/api/probe', headers=opener_headers)).status_code, 200)
+            self.assertEqual((await client.post('/api/probe', headers=opener_headers)).status_code, 200)
+
+        async with self.client() as client:
+            for value in ('wrong', self.session_token + '&extra=1'):
+                response = await client.get(
+                    '/api/probe',
+                    headers={**opener_headers, 'Cookie': f'video_translator_session={value}'},
+                )
+                self.assertEqual(response.status_code, 403)
+            response = await client.get(
+                f'/?session={self.session_token}&session=wrong',
+                headers=opener_headers,
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn('set-cookie', response.headers)
 
     async def test_declared_and_chunked_body_limits_are_enforced(self):
         async with self.client() as client:

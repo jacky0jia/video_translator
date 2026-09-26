@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import re
 from contextlib import asynccontextmanager
@@ -40,7 +41,10 @@ async def lifespan(app: FastAPI):
         await pipeline_service.shutdown()
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
-app.add_middleware(LocalWebSecurityMiddleware)
+app.add_middleware(
+    LocalWebSecurityMiddleware,
+    session_token=os.environ.pop("VIDEO_TRANSLATOR_SESSION_TOKEN", None),
+)
 
 # API routers must be registered BEFORE the catch-all SPA mount
 app.include_router(config.router, prefix="/api", tags=["Config"])

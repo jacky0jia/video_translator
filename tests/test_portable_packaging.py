@@ -157,6 +157,15 @@ class PortablePackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "already in use"):
                 launcher.validate_port(8769)
 
+    def test_launch_session_uses_a_fresh_url_safe_secret(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            with patch('secrets.token_urlsafe', side_effect=['first/token', 'second token']):
+                first = launcher.create_launch_session(8769)
+                second = launcher.create_launch_session(8770)
+            self.assertEqual(first, 'http://127.0.0.1:8769/?session=first%2Ftoken')
+            self.assertEqual(second, 'http://127.0.0.1:8770/?session=second+token')
+            self.assertEqual(os.environ[launcher.SESSION_TOKEN_ENV], 'second token')
+
     def test_build_requires_clean_tracked_source(self) -> None:
         with patch("subprocess.run") as run:
             run.return_value.stdout = " M app/main.py\n"

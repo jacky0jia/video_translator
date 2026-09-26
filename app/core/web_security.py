@@ -1,10 +1,13 @@
 """Browser and transport boundaries for a loopback-only, single-user app."""
+from http.cookies import CookieError, SimpleCookie
 import ipaddress
+import secrets
 from urllib.parse import urlsplit
+from urllib.parse import parse_qs
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from app.core.file_security import MAX_CLONE_BYTES, MAX_MEDIA_BYTES
 
@@ -33,8 +36,34 @@ def _origin(value: str, *, referer: bool = False) -> tuple[str, str, int] | None
 
 
 class LocalWebSecurityMiddleware:
-    def __init__(self, app):
+    def __init__(self, app, session_token: str | None = None):
         self.app = app
+        self.session_token = session_token
+
+    def _has_session(self, headers: Headers) -> bool:
+        if not self.session_token:
+            return False
+        cookie = SimpleCookie()
+        try:
+            cookie.load(headers.get('cookie', ''))
+        except CookieError:
+            return False
+        value = cookie.get('video_translator_session')
+        return value is not None and secrets.compare_digest(value.value, self.session_token)
+
+    def _is_session_bootstrap(self, scope) -> bool:
+        if not self.session_token or scope['method'] != 'GET' or scope['path'] != '/':
+            return False
+        try:
+            query = parse_qs(scope.get('query_string', b'').decode('ascii'), keep_blank_values=True)
+        except UnicodeDecodeError:
+            return False
+        values = query.get('session', [])
+        return (
+            len(query) == 1
+            and len(values) == 1
+            and secrets.compare_digest(values[0], self.session_token)
+        )
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
@@ -75,11 +104,23 @@ class LocalWebSecurityMiddleware:
         if target is None or target[1] not in ('127.0.0.1', 'localhost', '::1'):
             await reject(400, 'Invalid application host')
             return
+        if self._is_session_bootstrap(scope):
+            response = RedirectResponse('/', status_code=303)
+            response.set_cookie(
+                'video_translator_session',
+                self.session_token,
+                httponly=True,
+                samesite='strict',
+                path='/',
+            )
+            await response(scope, receive, secure_send)
+            return
+        has_session = self._has_session(headers)
         for name in ('origin', 'referer'):
             values = headers.getlist(name)
             if values:
                 same_origin = len(values) == 1 and _origin(values[0], referer=name == 'referer') == target
-                if not same_origin:
+                if not same_origin and not has_session:
                     # Desktop launchers and reused browser tabs can preserve an
                     # opaque or alternate-loopback opener for UI subresources.
                     # The shell is immutable and contains no user data; APIs and
@@ -88,7 +129,7 @@ class LocalWebSecurityMiddleware:
                         await reject(403, 'Cross-origin requests are not allowed')
                         return
         fetch_site = headers.get('sec-fetch-site', '')
-        if fetch_site in ('cross-site', 'same-site'):
+        if fetch_site in ('cross-site', 'same-site') and not has_session:
             # Some desktop webviews keep the opener's fetch-site classification for
             # the UI subresources. Only the immutable public shell may load in that
             # case; APIs and user media remain unavailable to another site.

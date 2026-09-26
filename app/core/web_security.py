@@ -77,9 +77,16 @@ class LocalWebSecurityMiddleware:
             return
         for name in ('origin', 'referer'):
             values = headers.getlist(name)
-            if values and (len(values) != 1 or _origin(values[0], referer=name == 'referer') != target):
-                await reject(403, 'Cross-origin requests are not allowed')
-                return
+            if values:
+                same_origin = len(values) == 1 and _origin(values[0], referer=name == 'referer') == target
+                if not same_origin:
+                    # Desktop launchers and reused browser tabs can preserve an
+                    # opaque or alternate-loopback opener for UI subresources.
+                    # The shell is immutable and contains no user data; APIs and
+                    # generated media continue to require an exact origin.
+                    if len(values) != 1 or not _is_public_shell_request(path, scope['method']):
+                        await reject(403, 'Cross-origin requests are not allowed')
+                        return
         fetch_site = headers.get('sec-fetch-site', '')
         if fetch_site in ('cross-site', 'same-site'):
             # Some desktop webviews keep the opener's fetch-site classification for

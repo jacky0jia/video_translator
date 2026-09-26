@@ -112,6 +112,23 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
             traversal = {'Sec-Fetch-Site': 'cross-site'}
             self.assertEqual((await client.get('/assets/../api/probe', headers=traversal)).status_code, 403)
 
+    async def test_public_shell_tolerates_opaque_or_alternate_loopback_opener(self):
+        async with self.client() as client:
+            for headers in (
+                {'Origin': 'null'},
+                {'Origin': 'http://localhost:8769'},
+                {'Referer': 'http://localhost:8769/'},
+                {'Origin': 'https://example.invalid'},
+            ):
+                with self.subTest(headers=headers):
+                    self.assertEqual((await client.get('/', headers=headers)).status_code, 200)
+                    self.assertEqual((await client.get('/assets/app.js', headers=headers)).status_code, 200)
+                    self.assertEqual((await client.head('/assets/app.js', headers=headers)).status_code, 200)
+                    self.assertEqual((await client.get('/subtitle-companion.svg', headers=headers)).status_code, 200)
+                    self.assertEqual((await client.post('/assets/app.js', headers=headers)).status_code, 403)
+                    for path in ('/api/probe', '/video/example.mp4', '/static/output/example.srt'):
+                        self.assertEqual((await client.get(path, headers=headers)).status_code, 403)
+
     async def test_declared_and_chunked_body_limits_are_enforced(self):
         async with self.client() as client:
             response = await client.post('/api/probe', headers={'Content-Length': str(1024**2 + 1)})

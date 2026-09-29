@@ -64,6 +64,13 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
 .app-font-select option { color: #172033; background: #fff; }
 .dark .app-font-select { color-scheme: dark; }
 .dark .app-font-select option { color: #edf2f7; background: #142338; }
+.app-style-control { border: 1px solid #d5dde8; border-radius: 7px; background: #f8fafc; }
+.app-style-control:hover { border-color: #9ba9bc; background: #eef2f7; }
+.app-style-control-active { border-color: #3b82f6; color: #fff; background: #3b82f6; }
+.app-style-control-active:hover { border-color: #2563eb; background: #2563eb; }
+.dark .app-style-control { border-color: #475569; background: #334155; }
+.dark .app-style-control:hover { border-color: #64748b; background: #475569; }
+.dark .app-style-control-active, .dark .app-style-control-active:hover { border-color: #3b82f6; background: #3b82f6; }
 .app-status { display: inline-flex; align-items: center; gap: 5px; }
 .app-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
 .app-status-processing::before { background: #5b6fee; box-shadow: 0 0 0 4px rgba(91, 111, 238, .12); }

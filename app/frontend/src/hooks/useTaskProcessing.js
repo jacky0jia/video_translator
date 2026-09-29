@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
 import {
   completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
-  stageIdForEvent, STAGE_MESSAGES,
+  stageIdForEvent, STAGE_MESSAGES, STANDALONE_TRANSCRIPTION_STATUSES,
   standaloneTranscriptionCompletion, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
@@ -119,6 +119,17 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     setLastFailedStage(task?.failed_stage || task?.interrupted_status || '');
     completionHandledRef.current = false;
   }, [task?.task_id, t]);
+
+  useEffect(() => {
+    if (!STANDALONE_TRANSCRIPTION_STATUSES.has(task?.status)) return;
+    if (task?.pipeline_status === 'processing' || task?.dubbing_status === 'processing' || task?.burn_status === 'processing') return;
+    const live = deriveTaskProcessingState(task, t);
+    setProgress(live.progress);
+    setCurrentStage(live.currentStage);
+    setMessage(live.message);
+    setStatus(live.status);
+    setRunning(live.running);
+  }, [task?.status, task?.progress_percent, task?.message, task?.gpu_stage, task?.pipeline_stage, task?.pipeline_status, task?.dubbing_status, task?.burn_status, t]);
 
   useEffect(() => {
     const completion = standaloneTranscriptionCompletion({ status: task?.status }, t);

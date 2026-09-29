@@ -4,6 +4,10 @@ export const ACTIVE_TASK_STATUSES = new Set([
   'pipeline_dubbing', 'burning', 'dubbing',
 ]);
 
+export const STANDALONE_TRANSCRIPTION_STATUSES = new Set([
+  'pending', 'extracting_audio', 'waiting_for_gpu', 'switching_model', 'transcribing',
+]);
+
 export function stageId(status) {
   const value = String(status).toLowerCase();
   if (value.includes('transcrib') || value === 'asr') return 'transcribe';
@@ -84,7 +88,7 @@ export function standaloneTranscriptionCompletion(event, t = value => value) {
 
 export function deriveTaskProcessingState(task, t = value => value) {
   const persistedStatus = task?.status || '';
-  const persistedStage = task?.pipeline_stage || persistedStatus;
+  const persistedStage = task?.pipeline_stage || task?.gpu_stage || persistedStatus;
   const running = task?.pipeline_status === 'processing'
     || task?.dubbing_status === 'processing'
     || task?.burn_status === 'processing'
@@ -96,12 +100,23 @@ export function deriveTaskProcessingState(task, t = value => value) {
     : (running ? 4 : 0);
 
   if (running) {
+    const currentStage = stageId(persistedStage)
+      || (STANDALONE_TRANSCRIPTION_STATUSES.has(persistedStatus) ? 'transcribe' : '');
+    const standaloneTranscription = currentStage === 'transcribe'
+      && STANDALONE_TRANSCRIPTION_STATUSES.has(persistedStatus);
+    const standaloneMessage = standaloneTranscription && persistedStatus === 'switching_model'
+      ? t('preparingTranscriptionModel')
+      : standaloneTranscription && persistedStatus === 'waiting_for_gpu'
+        ? t('waitingForTranscriptionModel')
+        : standaloneTranscription && persistedStatus === 'pending'
+          ? t('transcriptionQueued')
+          : '';
     return {
       running: true,
       status: 'processing',
       progress,
-      currentStage: stageId(persistedStage),
-      message: STAGE_MESSAGES[persistedStage] || task?.message || t('processing'),
+      currentStage,
+      message: standaloneMessage || STAGE_MESSAGES[persistedStage] || task?.message || t('processing'),
     };
   }
   if (task?.pipeline_status === 'failed' || ['failed', 'translation_failed'].includes(persistedStatus)) {

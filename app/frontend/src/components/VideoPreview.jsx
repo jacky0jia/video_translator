@@ -357,28 +357,10 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
         </div>
       </div>
 
-      <SubtitleStyleControls style={subtitleStyle} onChange={onSubtitleStyleChange} fonts={systemFonts} fontLabels={FONT_LABEL_MAP} />
+      <SubtitleStyleControls style={subtitleStyle} onChange={onSubtitleStyleChange} fonts={systemFonts} fontLabels={FONT_LABEL_MAP} showSource={showSource} showTarget={showTarget} onShowSourceChange={onShowSourceChange} onShowTargetChange={onShowTargetChange} />
 
-      <div className="mt-2 flex items-center gap-4 flex-wrap">
-        <label className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={showSource}
-            onChange={e => onShowSourceChange(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300 dark:border-slate-600 bg-gray-100 dark:bg-slate-700 text-blue-600 focus:ring-blue-500"
-          />
-          {t('showSource')}
-        </label>
-        <label className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={showTarget}
-            onChange={e => onShowTargetChange(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300 dark:border-slate-600 bg-gray-100 dark:bg-slate-700 text-blue-600 focus:ring-blue-500"
-          />
-          {t('showTarget')}
-        </label>
-        {availableTranslations.length > 1 && (
+      {availableTranslations.length > 1 && (
+        <div className="mt-2 flex items-center justify-end">
           <div className="flex items-center gap-2">
             <span className="text-sm text-slate-500 dark:text-slate-400">{t('subtitle')}:</span>
             <select
@@ -395,9 +377,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
               ))}
             </select>
           </div>
-        )}
-      </div>
-      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t('subtitleDisplayHint')}</p>
+        </div>
+      )}
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">

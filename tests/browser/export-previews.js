@@ -39,23 +39,31 @@ async page => {
   await page.goto('http://127.0.0.1:4178');
   await page.getByText('sample.mp4', { exact: true }).click();
   const doneStageBars = page.locator('.app-stage-done > span');
+  await page.waitForFunction(() => document.querySelectorAll('.app-stage-done > span').length >= 3);
   if (await doneStageBars.count() < 3) throw Error('Completed workflow stages are missing');
   for (const bar of await doneStageBars.all()) {
     const background = await bar.evaluate(element => getComputedStyle(element).backgroundColor);
     if (background !== 'rgb(16, 185, 129)') throw Error(`Dark completed stage lost its status color: ${background}`);
   }
-  await page.getByRole('button', { name: 'Subtitle Style' }).click();
+  if (await page.getByRole('button', { name: 'Subtitle Style' }).count()) throw Error('Obsolete Style toggle remains visible');
   const boldButton = page.getByTitle('Bold');
   const moveButton = page.getByTitle('Move subtitles up');
   const [boldBox, moveBox] = await Promise.all([boldButton.boundingBox(), moveButton.boundingBox()]);
   if (!boldBox || !moveBox || boldBox.width !== moveBox.width || boldBox.height !== moveBox.height) throw Error('Bold control size differs from the icon controls');
-  const fontSelect = page.getByLabel('Source & target font');
+  const fontSelect = page.getByLabel('Font');
   const fontOption = fontSelect.locator('option').first();
   const optionColors = await fontOption.evaluate(element => {
     const style = getComputedStyle(element);
     return { background: style.backgroundColor, color: style.color };
   });
   if (optionColors.background !== 'rgb(20, 35, 56)' || optionColors.color !== 'rgb(237, 242, 247)') throw Error(`Dark font options are unreadable: ${JSON.stringify(optionColors)}`);
+  if (!await page.getByText('Source', { exact: true }).isVisible() || !await page.getByText('Target', { exact: true }).isVisible()) throw Error('Subtitle visibility controls are not in the compact toolbar');
+  await page.getByRole('button', { name: 'Use light theme' }).click();
+  const lightBorders = await page.locator('[data-style-control]').evaluateAll(elements => elements.map(element => {
+    const style = getComputedStyle(element);
+    return { width: style.borderLeftWidth, style: style.borderLeftStyle, color: style.borderLeftColor };
+  }));
+  if (!lightBorders.length || lightBorders.some(border => border.width !== '1px' || border.style !== 'solid')) throw Error(`Light style controls have inconsistent borders: ${JSON.stringify(lightBorders)}`);
   const subtitleButton = page.getByRole('button', { name: 'Preview Japanese Subtitles' });
   if (subtitleRequests) throw Error('Subtitle fetched before preview opened');
   await subtitleButton.click();

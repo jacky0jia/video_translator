@@ -38,6 +38,19 @@ const activeWithoutProgress = deriveTaskProcessingState({
 assert.equal(activeWithoutProgress.running, true);
 assert.equal(activeWithoutProgress.progress, 4);
 
+const preparingTranscription = deriveTaskProcessingState({
+  status: 'switching_model', progress_percent: 4, message: '正在切换 AI 模型...',
+}, t);
+assert.equal(preparingTranscription.currentStage, 'transcribe');
+assert.equal(preparingTranscription.message, 'preparingTranscriptionModel');
+
+const activeTranscription = deriveTaskProcessingState({
+  status: 'transcribing', progress_percent: 42, message: 'Transcribing chunk 2/5',
+}, t);
+assert.equal(activeTranscription.currentStage, 'transcribe');
+assert.equal(activeTranscription.progress, 42);
+assert.equal(activeTranscription.message, 'Transcribing chunk 2/5');
+
 assert.equal(stageIdForEvent({status: 'switching_model', gpu_stage: 'tts'}, 'translate'), 'dub');
 assert.equal(stageIdForEvent({status: 'waiting_for_gpu', gpu_stage: 'asr'}, ''), 'transcribe');
 assert.equal(stageIdForEvent({status: 'switching_model'}, 'translate'), 'translate');
@@ -185,8 +198,13 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("task ? 'process' : 'tasks'", export_panel)
         self.assertIn("onAction", empty_state)
         self.assertIn("sourceAndTargetFont", style_controls)
-        self.assertIn("h-8 w-8 flex items-center", style_controls)
+        self.assertNotIn("subtitleStyle", style_controls)
+        self.assertNotIn("useState", style_controls)
+        self.assertIn("data-style-control", style_controls)
+        self.assertIn("M4 19h16", style_controls)
+        self.assertIn("M4 5h16", style_controls)
         self.assertIn("app-font-select", style_controls)
+        self.assertIn(".app-style-control", styles)
         self.assertIn(".dark .app-stage-active > span", styles)
         self.assertIn(".dark .app-stage-done > span", styles)
         self.assertIn(".dark .app-font-select option", styles)

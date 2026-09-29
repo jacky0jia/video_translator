@@ -16,7 +16,7 @@ class TaskUiContractTests(unittest.TestCase):
         script = r"""
 import assert from 'node:assert/strict';
 import {
-  completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageIdForEvent,
+  completedStageIds, deriveTaskProcessingState, localizedTaskMessage, retryPlanForFailure, stageIdForEvent,
   standaloneTranscriptionCompletion,
   subtitleVisibility,
 } from './src/hooks/taskProcessingState.js';
@@ -45,11 +45,26 @@ assert.equal(preparingTranscription.currentStage, 'transcribe');
 assert.equal(preparingTranscription.message, 'preparingTranscriptionModel');
 
 const activeTranscription = deriveTaskProcessingState({
-  status: 'transcribing', progress_percent: 42, message: 'Transcribing chunk 2/5',
-}, t);
+  status: 'transcribing', progress_percent: 42, message: '正在转录第 2/5 段...',
+}, key => ({transcribingChunk: 'Transcribing chunk {current}/{total}...'}[key] || key));
 assert.equal(activeTranscription.currentStage, 'transcribe');
 assert.equal(activeTranscription.progress, 42);
-assert.equal(activeTranscription.message, 'Transcribing chunk 2/5');
+assert.equal(activeTranscription.message, 'Transcribing chunk 2/5...');
+
+const en = key => ({
+  extractingAudio: 'Extracting audio...',
+  runningSpeechRecognition: 'Running speech recognition...',
+  splittingAudio: 'Audio duration: {duration} seconds. Splitting into chunks...',
+  transcribingChunk: 'Transcribing chunk {current}/{total}...',
+  savingTranscription: 'Transcription complete. Saving results...',
+  transcribing: 'Transcribing...',
+}[key] || key);
+assert.equal(localizedTaskMessage({status:'extracting_audio', message:'正在从视频中提取音频...'}, en), 'Extracting audio...');
+assert.equal(localizedTaskMessage({status:'transcribing', message:'正在运行语音识别...'}, en), 'Running speech recognition...');
+assert.equal(localizedTaskMessage({status:'transcribing', message:'音频时长 721 秒，正在分块...'}, en), 'Audio duration: 721 seconds. Splitting into chunks...');
+assert.equal(localizedTaskMessage({status:'transcribing', message:'正在转录第 1/2 段...'}, en), 'Transcribing chunk 1/2...');
+assert.equal(localizedTaskMessage({status:'transcribing', message:'转录完成，正在保存结果...'}, en), 'Transcription complete. Saving results...');
+assert.equal(localizedTaskMessage({status:'transcribing', message:'worker diagnostic'}, en), 'worker diagnostic');
 
 assert.equal(stageIdForEvent({status: 'switching_model', gpu_stage: 'tts'}, 'translate'), 'dub');
 assert.equal(stageIdForEvent({status: 'waiting_for_gpu', gpu_stage: 'asr'}, ''), 'transcribe');

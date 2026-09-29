@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
 import {
   completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
-  stageIdForEvent, STAGE_MESSAGES, STANDALONE_TRANSCRIPTION_STATUSES,
+  stageIdForEvent, localizedTaskMessage, STAGE_MESSAGES, STANDALONE_TRANSCRIPTION_STATUSES,
   standaloneTranscriptionCompletion, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
@@ -175,7 +175,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     if (Number.isFinite(nextProgress)) setProgress(nextProgress);
     const eventStage = event.pipeline_stage || event.status;
     setCurrentStage(value => stageIdForEvent(event, value));
-    if (event.message) setMessage(STAGE_MESSAGES[eventStage] || event.message);
+    if (event.message) setMessage(STAGE_MESSAGES[eventStage] || localizedTaskMessage(event, t));
     const transcriptionCompletion = standaloneTranscriptionCompletion(event, t);
     if (transcriptionCompletion) {
       setProgress(transcriptionCompletion.progress);

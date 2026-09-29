@@ -48,6 +48,37 @@ export const STAGE_MESSAGES = {
   burning: 'Rendering subtitles',
 };
 
+function formatMessage(template, values) {
+  return Object.entries(values).reduce(
+    (message, [key, value]) => message.replaceAll(`{${key}}`, String(value)),
+    template,
+  );
+}
+
+export function localizedTaskMessage(task, t = value => value) {
+  const status = String(task?.status || '');
+  const rawMessage = String(task?.message || '');
+  if (status === 'extracting_audio') return t('extractingAudio');
+  if (status !== 'transcribing') return rawMessage;
+
+  const chunk = rawMessage.match(/(?:正在转录第|transcribing\s+(?:chunk|segment))\s*(\d+)\s*\/\s*(\d+)\s*(?:段)?/i);
+  if (chunk) {
+    return formatMessage(t('transcribingChunk'), { current: chunk[1], total: chunk[2] });
+  }
+  const duration = rawMessage.match(/(?:音频时长|audio duration)\s*([\d.]+)\s*(?:秒|seconds?)/i);
+  if (duration) {
+    return formatMessage(t('splittingAudio'), { duration: duration[1] });
+  }
+  if (/正在运行语音识别|running speech recognition/i.test(rawMessage)) {
+    return t('runningSpeechRecognition');
+  }
+  if (/转录完成.*保存结果|saving (?:the )?transcription/i.test(rawMessage)) {
+    return t('savingTranscription');
+  }
+  if (/正在转录音频|transcribing audio/i.test(rawMessage)) return t('transcribing');
+  return rawMessage || t('transcribing');
+}
+
 const DUBBING_RETRANSLATION_PATTERNS = [
   /自然配音内容过长/,
   /dubbing content is too long/i,
@@ -116,7 +147,7 @@ export function deriveTaskProcessingState(task, t = value => value) {
       status: 'processing',
       progress,
       currentStage,
-      message: standaloneMessage || STAGE_MESSAGES[persistedStage] || task?.message || t('processing'),
+      message: standaloneMessage || STAGE_MESSAGES[persistedStage] || localizedTaskMessage(task, t) || t('processing'),
     };
   }
   if (task?.pipeline_status === 'failed' || ['failed', 'translation_failed'].includes(persistedStatus)) {

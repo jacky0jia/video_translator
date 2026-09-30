@@ -1,17 +1,32 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from fastapi import BackgroundTasks, HTTPException
 
 from app.api.dubbing import DubbingRequest, list_voices, start_dubbing
 from app.api.pipeline import PipelineRequest, start_pipeline
+from app.services.dubbing_service import DubbingService
 from app.services.tts.base import VoiceInfo
 from app.services.tts.registry import TTSRoute
 from app.services.tts.voice_selection import resolve_available_voice
 
 
 class DubbingApiTests(unittest.TestCase):
+    def test_mux_selects_main_video_and_dub_audio_without_cover_art(self):
+        service = DubbingService.__new__(DubbingService)
+        service.ffmpeg_path = "ffmpeg"
+        process = Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.stderr.readline.return_value = b""
+        with patch("app.services.dubbing_service.subprocess.Popen", return_value=process) as popen:
+            service._mux_video(Path("source.mkv"), Path("dub.wav"), Path("dubbed.mp4"), 60, "test-task")
+        command = popen.call_args.args[0]
+        self.assertEqual([command[index + 1] for index, arg in enumerate(command) if arg == "-map"], ["0:V:0", "1:a:0"])
+        self.assertIn("-shortest", command)
+
     def test_edge_accepts_four_languages_and_corrects_mismatched_voice(self):
         defaults = {
             "Chinese": "zh-CN-XiaoxiaoNeural",

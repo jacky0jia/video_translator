@@ -909,8 +909,10 @@ class DubbingService:
             self.ffmpeg_path, "-y",
             "-i", str(video_path),
             "-i", str(dub_audio),
-            "-map", "0:v",
-            "-map", "1:a",
+            # Exclude attached cover art: with -shortest it can end the dub
+            # track after the cover's single frame while leaving video intact.
+            "-map", "0:V:0",
+            "-map", "1:a:0",
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "192k",

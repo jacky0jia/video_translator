@@ -3,7 +3,7 @@ import { useTaskSSE } from './useTaskSSE';
 import {
   completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
   stageIdForEvent, localizedTaskMessage, STAGE_MESSAGES, STANDALONE_TRANSCRIPTION_STATUSES,
-  standaloneTranscriptionCompletion, subtitleTranslationProgress, subtitleVisibility,
+  standaloneTranscriptionCompletion, stageProgressForEvent, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
@@ -195,21 +195,19 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     }
     if (STANDALONE_TRANSCRIPTION_STATUSES.has(event.status)
       && event.pipeline_status !== 'processing') {
-      const nextProgress = Number(event.progress_percent);
-      if (Number.isFinite(nextProgress)) setProgress(nextProgress);
+      setProgress(value => stageProgressForEvent(event, value));
       setCurrentStage('transcribe');
       setMessage(localizedTaskMessage(event, t));
       return;
     }
     if (route === 'subtitles') {
       if (event.status !== 'translating') return;
-      setProgress(value => subtitleTranslationProgress(event.progress_percent, value));
+      setProgress(value => stageProgressForEvent(event, value));
       setCurrentStage('translate');
       setMessage(localizedTaskMessage(event, t));
       return;
     }
-    const nextProgress = Number(event.progress_percent);
-    if (Number.isFinite(nextProgress)) setProgress(nextProgress);
+    setProgress(value => stageProgressForEvent(event, value));
     const eventStage = event.pipeline_stage || event.status;
     setCurrentStage(value => stageIdForEvent(event, value));
     if (event.message) setMessage(STAGE_MESSAGES[eventStage] ? t(STAGE_MESSAGES[eventStage]) : localizedTaskMessage(event, t));
@@ -255,7 +253,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const ensureTranslation = async (force = false) => {
     if (!force && task.translations?.[targetLang]) return;
     setCurrentStage('translate');
-    setProgress(value => Math.max(value, 40));
+    setProgress(0);
     setMessage(t('translating'));
     const body = new URLSearchParams();
     body.append('json_path', task.transcription_path);
@@ -283,12 +281,12 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const startSubtitles = async ({ forceTranslate = false } = {}) => {
     await ensureTranslation(forceTranslate);
     await refresh();
-    setProgress(burn ? 70 : 85);
+    setProgress(100);
     setMessage(t('creatingSubtitleFile'));
     await createSubtitleFile();
     if (burn) {
       setCurrentStage('render');
-      setProgress(85);
+      setProgress(0);
       setMessage(t('burningSubtitlesIntoVideo'));
       const visibility = subtitleVisibility(subtitleContent, showSource, showTarget);
       const response = await fetch('/api/burn', {
@@ -340,7 +338,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     setStatus('processing');
     const hasTranslation = Boolean(task.translations?.[targetLang] || (task.target_lang === targetLang && task.translation_path));
     const firstStage = forceTranslate || !hasTranslation ? 'translate' : route === 'dubbing' || forceDub ? 'dub' : burn ? 'render' : 'translate';
-    setProgress(firstStage === 'translate' ? 40 : firstStage === 'dub' ? 70 : 85);
+    setProgress(0);
     setCurrentStage(firstStage);
     try {
       if (route === 'dubbing') {
@@ -390,6 +388,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       setRunning(true);
       setStatus('processing');
       setCurrentStage('translate');
+      setProgress(0);
       setMessage(t('compressingTranslation'));
     } else {
       setRunning(false);

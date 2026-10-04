@@ -28,7 +28,7 @@ const active = deriveTaskProcessingState({
   message: 'switching model', dubbing_status: 'processing',
 }, t);
 assert.deepEqual(active, {
-  running: true, status: 'processing', progress: 75,
+  running: true, status: 'processing', progress: 0,
   currentStage: 'dub', message: 'pipeline_dubbing',
 });
 
@@ -36,7 +36,7 @@ const activeWithoutProgress = deriveTaskProcessingState({
   status: 'translating', pipeline_status: 'processing', progress_percent: null,
 }, t);
 assert.equal(activeWithoutProgress.running, true);
-assert.equal(activeWithoutProgress.progress, 4);
+assert.equal(activeWithoutProgress.progress, 0);
 
 const preparingTranscription = deriveTaskProcessingState({
   status: 'switching_model', progress_percent: 4, message: '正在切换 AI 模型...',
@@ -196,7 +196,7 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertIn("setTtsMode(data.tts_mode", processing)
         self.assertIn("standaloneTranscriptionCompletion({ status: task?.status }, t)", processing)
         self.assertIn("running ? task?.task_id : null", processing)
-        self.assertIn("subtitleTranslationProgress(event.progress_percent, value)", processing)
+        self.assertIn("stageProgressForEvent(event, value)", processing)
         self.assertIn("cache: 'no-store'", processing)
         self.assertIn("controller?.abort()", processing)
         self.assertIn("currentRequestId !== requestId", processing)

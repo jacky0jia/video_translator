@@ -24,10 +24,16 @@ export function stageIdForEvent(event, currentStage = '') {
     || currentStage;
 }
 
-export function subtitleTranslationProgress(percent, previous = 40) {
-  const numeric = Number(percent);
-  if (!Number.isFinite(numeric)) return previous;
-  return Math.max(previous, 40 + Math.round(Math.max(0, Math.min(95, numeric) - 5) / 90 * 30));
+export function stageProgressForEvent(event, previous = 0) {
+  const status = String(event?.status || '');
+  if (event?.pipeline_status === 'completed' || ['completed', 'dubbing_completed', 'burning_completed'].includes(status)) return 100;
+  // Pipeline progress_percent is an overall milestone, not progress inside the new stage.
+  if (status.startsWith('pipeline_') || (String(event?.pipeline_stage || '').startsWith('pipeline_')
+    && !['transcribing', 'extracting_audio', 'translating', 'dubbing', 'burning'].includes(status))) return 0;
+  const raw = ['dubbing', 'burning'].includes(status) ? event?.progress : event?.progress_percent;
+  if (raw === null || raw === undefined || raw === '') return previous;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric))) : previous;
 }
 
 export function completedStageIds(task, targetLang) {
@@ -152,9 +158,9 @@ export function deriveTaskProcessingState(task, t = value => value) {
     || ACTIVE_TASK_STATUSES.has(persistedStatus);
   const hasPersistedProgress = task?.progress_percent !== null && task?.progress_percent !== undefined;
   const numericProgress = Number(task?.progress_percent);
-  const progress = hasPersistedProgress && Number.isFinite(numericProgress)
-    ? numericProgress
-    : (running ? 4 : 0);
+  const progress = running
+    ? stageProgressForEvent(task)
+    : (hasPersistedProgress && Number.isFinite(numericProgress) ? numericProgress : 0);
 
   if (running) {
     const currentStage = stageId(persistedStage)

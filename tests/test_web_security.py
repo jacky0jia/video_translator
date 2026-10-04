@@ -78,6 +78,28 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
                 response = await client.get('/api/probe', headers=headers)
                 self.assertEqual(response.status_code, 403)
 
+    async def test_rejection_log_identifies_safe_origin_metadata_without_secrets(self):
+        async with self.client(url='http://127.0.0.1:8770') as client:
+            with self.assertLogs('app.core.web_security', level='WARNING') as captured:
+                response = await client.get(
+                    '/api/probe',
+                    headers={
+                        'Origin': 'http://127.0.0.1:8769',
+                        'Cookie': 'video_translator_session=private-value',
+                    },
+                )
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('reason=origin', captured.output[0])
+            self.assertIn("('http', '127.0.0.1', 8770)", captured.output[0])
+            self.assertIn("('http', '127.0.0.1', 8769)", captured.output[0])
+            self.assertNotIn('private-value', captured.output[0])
+
+            with self.assertLogs('app.core.web_security', level='WARNING') as captured:
+                response = await client.get('/api/probe', headers={'Sec-Fetch-Site': 'same-site'})
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('reason=sec-fetch-site', captured.output[0])
+            self.assertIn('supplied=same-site', captured.output[0])
+
     async def test_dns_rebinding_hosts_and_duplicate_headers_are_rejected(self):
         async with self.client() as client:
             for host in ('evil.example:8769', '127.0.0.1.evil.example', 'localhost@evil.example', '[::1', '127.0.0.1:bad'):

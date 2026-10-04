@@ -1,6 +1,7 @@
 """Browser and transport boundaries for a loopback-only, single-user app."""
 from http.cookies import CookieError, SimpleCookie
 import ipaddress
+import logging
 import secrets
 from urllib.parse import urlsplit
 from urllib.parse import parse_qs
@@ -10,6 +11,9 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import JSONResponse, RedirectResponse
 
 from app.core.file_security import MAX_CLONE_BYTES, MAX_MEDIA_BYTES
+
+
+logger = logging.getLogger(__name__)
 
 
 def _is_public_shell_request(path: str, method: str) -> bool:
@@ -126,6 +130,13 @@ class LocalWebSecurityMiddleware:
                     # The shell is immutable and contains no user data; APIs and
                     # generated media continue to require an exact origin.
                     if len(values) != 1 or not _is_public_shell_request(path, scope['method']):
+                        logger.warning(
+                            'Rejected local browser request: reason=%s expected=%s supplied=%s method=%s',
+                            name,
+                            target,
+                            _origin(values[0], referer=name == 'referer') if len(values) == 1 else 'multiple',
+                            scope['method'],
+                        )
                         await reject(403, 'Cross-origin requests are not allowed')
                         return
         fetch_site = headers.get('sec-fetch-site', '')
@@ -134,6 +145,11 @@ class LocalWebSecurityMiddleware:
             # the UI subresources. Only the immutable public shell may load in that
             # case; APIs and user media remain unavailable to another site.
             if not _is_public_shell_request(path, scope['method']):
+                logger.warning(
+                    'Rejected local browser request: reason=sec-fetch-site expected=same-origin supplied=%s method=%s',
+                    fetch_site,
+                    scope['method'],
+                )
                 await reject(403, 'Cross-origin requests are not allowed')
                 return
 

@@ -35,4 +35,6 @@ test('four-stage overview appears before current-stage progress', () => {
   const panel = readFileSync(new URL('../app/frontend/src/components/ProcessPanel.jsx', import.meta.url), 'utf8');
   const status = panel.slice(panel.indexOf('function ProcessingStatus'), panel.indexOf('export default function ProcessPanel'));
   assert.ok(status.indexOf('PROCESS_STAGES.map') < status.indexOf('role="progressbar"'));
+  assert.match(status, /className="grid grid-cols-4 gap-1\.5 rounded-xl border border-slate-200[^\"]*"[^>]*>\{PROCESS_STAGES\.map/);
+  assert.match(status, /<div className="px-1">\s*<div className="mb-2 flex items-start/);
 });

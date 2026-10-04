@@ -66,6 +66,31 @@ class WebSecurityTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
 
+    async def test_port_normalized_origin_requires_browser_same_origin_proof(self):
+        for host in ('127.0.0.1', 'localhost'):
+            async with self.client(url=f'http://{host}:8770') as client:
+                for method in ('GET', 'POST'):
+                    headers = {'Origin': f'http://{host}', 'Sec-Fetch-Site': 'same-origin'}
+                    response = await client.request(method, '/api/probe', headers=headers)
+                    self.assertEqual(response.status_code, 200)
+                    headers['Referer'] = f'http://{host}/settings'
+                    response = await client.request(method, '/api/probe', headers=headers)
+                    self.assertEqual(response.status_code, 200)
+
+                for fetch_site in ('same-site', 'cross-site', ''):
+                    response = await client.get(
+                        '/api/probe',
+                        headers={'Origin': f'http://{host}', 'Sec-Fetch-Site': fetch_site},
+                    )
+                    self.assertEqual(response.status_code, 403)
+
+                for origin in (f'http://{host}:8769', 'http://evil.example', 'null'):
+                    response = await client.post(
+                        '/api/probe',
+                        headers={'Origin': origin, 'Sec-Fetch-Site': 'same-origin'},
+                    )
+                    self.assertEqual(response.status_code, 403)
+
     async def test_untrusted_browser_origins_cannot_read_or_mutate(self):
         async with self.client() as client:
             for origin in ('https://evil.example', 'null', 'http://127.0.0.1:8000',

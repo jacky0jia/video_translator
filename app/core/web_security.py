@@ -39,6 +39,20 @@ def _origin(value: str, *, referer: bool = False) -> tuple[str, str, int] | None
         return None
 
 
+def _same_origin_with_normalized_port(
+    supplied: tuple[str, str, int] | None,
+    target: tuple[str, str, int],
+    fetch_site: str,
+) -> bool:
+    """Tolerate a stripped loopback port only when the browser confirms same-origin."""
+    return (
+        fetch_site == 'same-origin'
+        and target[0] == 'http'
+        and target[2] != 80
+        and supplied == ('http', target[1], 80)
+    )
+
+
 class LocalWebSecurityMiddleware:
     def __init__(self, app, session_token: str | None = None):
         self.app = app
@@ -120,10 +134,15 @@ class LocalWebSecurityMiddleware:
             await response(scope, receive, secure_send)
             return
         has_session = self._has_session(headers)
+        fetch_site = headers.get('sec-fetch-site', '')
         for name in ('origin', 'referer'):
             values = headers.getlist(name)
             if values:
-                same_origin = len(values) == 1 and _origin(values[0], referer=name == 'referer') == target
+                supplied = _origin(values[0], referer=name == 'referer') if len(values) == 1 else None
+                same_origin = len(values) == 1 and (
+                    supplied == target
+                    or _same_origin_with_normalized_port(supplied, target, fetch_site)
+                )
                 if not same_origin and not has_session:
                     # Desktop launchers and reused browser tabs can preserve an
                     # opaque or alternate-loopback opener for UI subresources.
@@ -131,15 +150,15 @@ class LocalWebSecurityMiddleware:
                     # generated media continue to require an exact origin.
                     if len(values) != 1 or not _is_public_shell_request(path, scope['method']):
                         logger.warning(
-                            'Rejected local browser request: reason=%s expected=%s supplied=%s method=%s',
+                            'Rejected local browser request: reason=%s expected=%s supplied=%s fetch_site=%s method=%s',
                             name,
                             target,
-                            _origin(values[0], referer=name == 'referer') if len(values) == 1 else 'multiple',
+                            supplied if len(values) == 1 else 'multiple',
+                            fetch_site if fetch_site in ('same-origin', 'same-site', 'cross-site', 'none') else 'other',
                             scope['method'],
                         )
                         await reject(403, 'Cross-origin requests are not allowed')
                         return
-        fetch_site = headers.get('sec-fetch-site', '')
         if fetch_site in ('cross-site', 'same-site') and not has_session:
             # Some desktop webviews keep the opener's fetch-site classification for
             # the UI subresources. Only the immutable public shell may load in that

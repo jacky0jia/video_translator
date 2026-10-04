@@ -159,6 +159,7 @@ class PipelineService:
         show_target: bool,
         subtitle_style: dict[str, Any],
         video_path: Path,
+        end_note_enabled: bool,
     ) -> None:
         from app.services.video_burn_service import video_burn_service
         await asyncio.to_thread(
@@ -170,6 +171,7 @@ class PipelineService:
             target_lang,
             str(video_path),
             "dubbing_video_path",
+            end_note_enabled,
         )
 
     async def run(
@@ -186,6 +188,7 @@ class PipelineService:
         force_translate: bool = False,
         force_dub: bool = False,
         compress_translation: bool = False,
+        end_note_enabled: bool = False,
     ) -> None:
         try:
             task = history_manager.get_task(task_id)
@@ -232,24 +235,29 @@ class PipelineService:
             if not raw_video or not raw_video.exists():
                 raise RuntimeError("Dubbing did not produce a video output")
 
-            if burn_subtitles:
-                self._set_stage(task_id, "pipeline_rendering", "正在把字幕烧录到配音视频...", 90)
+            if burn_subtitles or end_note_enabled:
+                self._set_stage(task_id, "pipeline_rendering", "正在渲染最终视频...", 90)
                 stage = self._burn_stage or self._default_burn
                 await stage(
                     task_id,
                     target_lang,
-                    show_source,
-                    show_target,
+                    show_source if burn_subtitles else False,
+                    show_target if burn_subtitles else False,
                     subtitle_style or {},
                     raw_video,
+                    end_note_enabled,
                 )
-                history_manager.update_task(task_id, {"dubbing_burn_subtitles": True})
+                history_manager.update_task(task_id, {
+                    "dubbing_burn_subtitles": burn_subtitles,
+                    "dubbing_end_note_enabled": end_note_enabled,
+                })
             else:
                 history_manager.update_task(
                     task_id,
                     {
                         "dubbing_video_path": raw_video_value,
                         "dubbing_burn_subtitles": False,
+                        "dubbing_end_note_enabled": False,
                     },
                 )
 
@@ -284,6 +292,7 @@ class PipelineService:
                             "voice": voice, "speed": speed, "burn_subtitles": burn_subtitles,
                             "show_source": show_source, "show_target": show_target,
                             "subtitle_style": subtitle_style or {}, "subtitle_format": subtitle_format,
+                            "end_note_enabled": end_note_enabled,
                         },
                     }
                     history_manager.update_task(task_id, data)
@@ -318,6 +327,7 @@ class PipelineService:
         force_translate: bool = False,
         force_dub: bool = False,
         compress_translation: bool = False,
+        end_note_enabled: bool = False,
     ) -> asyncio.Task:
         current = self._tasks.get(task_id)
         if current and not current.done():
@@ -336,6 +346,7 @@ class PipelineService:
                 force_translate,
                 force_dub,
                 compress_translation,
+                end_note_enabled,
             ),
             name=f"pipeline-{task_id}",
         )

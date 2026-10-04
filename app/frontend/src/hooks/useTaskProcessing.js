@@ -32,6 +32,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [route, setRoute] = useState(task?.last_process_route || 'subtitles');
   const [format, setFormat] = useState(task?.last_subtitle_format || 'srt');
   const [burn, setBurn] = useState(false);
+  const [endNoteEnabled, setEndNoteEnabled] = useState(task?.last_end_note_enabled !== false);
   const [subtitleContent, setSubtitleContent] = useState('translated');
   const [voices, setVoices] = useState([]);
   const [voice, setVoice] = useState('');
@@ -49,8 +50,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
 
   const targetLang = task?.target_lang || 'Chinese';
   const requiredStages = useMemo(() => route === 'dubbing'
-    ? (burn ? PROCESS_STAGES : ['transcribe', 'translate', 'dub'])
-    : burn ? ['transcribe', 'translate', 'render'] : ['transcribe', 'translate'], [route, burn]);
+    ? (burn || endNoteEnabled ? PROCESS_STAGES : ['transcribe', 'translate', 'dub'])
+    : burn ? ['transcribe', 'translate', 'render'] : ['transcribe', 'translate'], [route, burn, endNoteEnabled]);
   const matchingVoices = useMemo(
     () => voices.filter(item => voiceMatches(item, targetLang)),
     [voices, targetLang],
@@ -111,6 +112,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     const restored = deriveTaskProcessingState(task, t);
     setRoute(task?.last_process_route || 'subtitles');
     setFormat(task?.last_subtitle_format || 'srt');
+    setEndNoteEnabled(task?.last_end_note_enabled !== false);
     setProgress(restored.progress);
     setCurrentStage(restored.currentStage);
     setMessage(restored.message);
@@ -297,6 +299,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
           ...visibility,
           style: subtitleStyle,
           target_lang: targetLang,
+          end_note_enabled: endNoteEnabled,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -318,6 +321,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
         speed,
         subtitle_format: format,
         burn_subtitles: burn,
+        end_note_enabled: endNoteEnabled,
         ...visibility,
         subtitle_style: subtitleStyle || {},
         force_translate: forceTranslate,
@@ -396,8 +400,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   };
 
   return {
-    burn, cancel, completedStages, currentStage, decideCompression, format, matchingVoices, message, progress,
-    requiredStages, retryFailedStage, route, run, running, setBurn, setFormat,
+    burn, cancel, completedStages, currentStage, decideCompression, endNoteEnabled, format, matchingVoices, message, progress,
+    requiredStages, retryFailedStage, route, run, running, setBurn, setEndNoteEnabled, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
     subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,
   };

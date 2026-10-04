@@ -19,6 +19,7 @@ class PipelineRequest(BaseModel):
     speed: float = 1.0
     subtitle_format: str = "srt"
     burn_subtitles: bool = False
+    end_note_enabled: bool = True
     show_source: bool = False
     show_target: bool = True
     subtitle_style: dict = Field(default_factory=dict)
@@ -71,6 +72,7 @@ async def start_pipeline(request: PipelineRequest):
                 "last_process_route": "dubbing",
                 "last_subtitle_format": request.subtitle_format.lower(),
                 "dubbing_burn_subtitles": request.burn_subtitles,
+                "last_end_note_enabled": request.end_note_enabled,
             },
         )
         pipeline_service.start(
@@ -85,6 +87,7 @@ async def start_pipeline(request: PipelineRequest):
             request.subtitle_format.lower(),
             request.force_translate,
             request.force_dub,
+            end_note_enabled=request.end_note_enabled,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -113,6 +116,7 @@ async def decide_compression(task_id: str, decision: CompressionDecision):
             request["burn_subtitles"], request["show_source"], request["show_target"],
             request["subtitle_style"], request["subtitle_format"],
             force_dub=True, compress_translation=True,
+            end_note_enabled=request.get("end_note_enabled", True),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

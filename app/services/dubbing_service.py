@@ -1149,6 +1149,7 @@ class DubbingService:
                     "dubbing_raw_video_path": dub_video_url,
                     "dubbing_video_path": dub_video_url,
                     "dubbing_burn_subtitles": False,
+                    "dubbing_end_note_enabled": False,
                 },
             )
             emit_event(

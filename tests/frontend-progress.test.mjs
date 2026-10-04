@@ -17,7 +17,7 @@ test('live speech and translation progress localize in English', () => {
   assert.equal(localizedTaskMessage({ status: 'dubbing', message: '正在合成语音 3/16' }, en), 'Synthesizing speech 3/16...');
   assert.equal(localizedTaskMessage({ status: 'dubbing', message: '正在对齐时间轴' }, en), 'Aligning the audio timeline...');
   assert.equal(localizedTaskMessage({ status: 'translating', message: '3/16' }, en), 'Translating batch 3/16...');
-  assert.equal(localizedTaskMessage({ status: 'pipeline_rendering', pipeline_stage: 'pipeline_rendering' }, en), 'Rendering subtitles onto the dubbed video...');
+  assert.equal(localizedTaskMessage({ status: 'pipeline_rendering', pipeline_stage: 'pipeline_rendering' }, en), 'Rendering the final video...');
 });
 
 test('color controls use borderless inner swatches', () => {

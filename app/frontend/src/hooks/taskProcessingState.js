@@ -41,7 +41,7 @@ export function completedStageIds(task, targetLang) {
     && (task?.dubbing_audio_path || task?.dubbing_video_path);
   if (dubbed) completed.push('dub');
   const rendered = (task?.burn_status === 'completed' && task?.burn_path)
-    || (dubbed && task?.dubbing_burn_subtitles === true && task?.dubbing_video_path);
+    || (dubbed && (task?.dubbing_burn_subtitles === true || task?.dubbing_end_note_enabled === true) && task?.dubbing_video_path);
   if (rendered) completed.push('render');
   return completed;
 }

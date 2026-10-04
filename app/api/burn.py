@@ -17,11 +17,12 @@ class BurnRequest(BaseModel):
     show_target: bool = True
     style: Optional[dict] = None
     target_lang: Optional[str] = None
+    end_note_enabled: bool = True
 
 
-def _run_burn_task(task_id: str, show_source: bool, show_target: bool, style: Optional[dict], target_lang: Optional[str]):
+def _run_burn_task(task_id: str, show_source: bool, show_target: bool, style: Optional[dict], target_lang: Optional[str], end_note_enabled: bool):
     try:
-        video_burn_service.burn(task_id, show_source, show_target, style or {}, target_lang)
+        video_burn_service.burn(task_id, show_source, show_target, style or {}, target_lang, end_note_enabled=end_note_enabled)
     except Exception:
         logger.exception(f"Background burn task failed for {task_id}")
         # Error state already updated inside burn()
@@ -44,6 +45,8 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
     if task.get("burn_status") == "processing":
         raise HTTPException(status_code=409, detail="Burn already in progress")
 
+    history_manager.update_task(request.task_id, {"last_end_note_enabled": request.end_note_enabled})
+
     background_tasks.add_task(
         _run_burn_task,
         request.task_id,
@@ -51,6 +54,7 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
         request.show_target,
         request.style,
         request.target_lang,
+        request.end_note_enabled,
     )
 
     return {"status": "started", "task_id": request.task_id}

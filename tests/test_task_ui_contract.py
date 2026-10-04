@@ -79,6 +79,12 @@ assert.deepEqual(completedStageIds({
 }, 'Chinese'), ['transcribe', 'translate', 'dub', 'render']);
 assert.deepEqual(completedStageIds({
   transcription_path: '/source.json', target_lang: 'Chinese',
+  translations: {Chinese: '/translated.json'}, dubbing_status: 'completed',
+  dubbing_target_lang: 'Chinese', dubbing_audio_path: '/dub.wav',
+  dubbing_video_path: '/dub.mp4', dubbing_end_note_enabled: true,
+}, 'Chinese'), ['transcribe', 'translate', 'dub', 'render']);
+assert.deepEqual(completedStageIds({
+  transcription_path: '/source.json', target_lang: 'Chinese',
   translations: {Japanese: '/translated.json'},
 }, 'Chinese'), ['transcribe']);
 

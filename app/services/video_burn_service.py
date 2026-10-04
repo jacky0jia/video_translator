@@ -14,6 +14,7 @@ from app.core.schemas import TranscriptionResult
 from app.services.formatter_service import subtitle_formatter
 
 logger = logging.getLogger(__name__)
+END_NOTE_URL = "https://github.com/jacky0jia/video_translator"
 
 
 class VideoBurnService:
@@ -70,7 +71,7 @@ class VideoBurnService:
                 str(ffprobe_path),
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height,bit_rate,avg_frame_rate,pix_fmt,color_space,color_transfer,color_primaries",
+                "-show_entries", "stream=codec_name,width,height,bit_rate,avg_frame_rate,pix_fmt,color_space,color_transfer,color_primaries:format=duration",
                 "-of", "json",
                 str(video_path),
             ]
@@ -78,9 +79,11 @@ class VideoBurnService:
             data = json.loads(result.stdout)
             stream = data["streams"][0]
             bitrate = stream.get("bit_rate")
+            duration = float((data.get("format") or {}).get("duration") or 0)
             profile = {
                 "probed": True, "codec": str(stream.get("codec_name") or "unknown"),
                 "width": int(stream["width"]), "height": int(stream["height"]),
+                "duration": duration if duration > 0 else None,
                 "bitrate": int(bitrate) if str(bitrate or "").isdigit() else None,
                 "frame_rate": str(stream.get("avg_frame_rate") or "unknown"),
                 "pixel_format": str(stream.get("pix_fmt") or "unknown"),
@@ -93,7 +96,7 @@ class VideoBurnService:
         except Exception as e:
             logger.warning("Failed to probe source video profile: %s", e)
             return {"probed": False, "codec": "unknown", "width": 1920, "height": 1080,
-                    "bitrate": None, "frame_rate": "unknown", "pixel_format": "unknown",
+                    "duration": None, "bitrate": None, "frame_rate": "unknown", "pixel_format": "unknown",
                     "color_space": "unknown", "color_transfer": "unknown", "color_primaries": "unknown"}
 
     def _get_video_bitrate(self, video_path: Path) -> Optional[int]:
@@ -158,6 +161,9 @@ class VideoBurnService:
         target_lang: Optional[str] = None,
         playres_x: int = 1920,
         playres_y: int = 1080,
+        end_note_enabled: bool = False,
+        video_duration: float = 0,
+        dubbed: bool = False,
     ) -> Tuple[Path, float]:
         logger.info(f"Generating ASS for task {task['task_id']}: show_source={show_source}, show_target={show_target}, target_lang={target_lang}")
         original_result = None
@@ -183,7 +189,7 @@ class VideoBurnService:
                 if result:
                     logger.info(f"Target subtitle loaded: {len(result.segments)} segments")
 
-        if not result and not original_result:
+        if not result and not original_result and not end_note_enabled:
             raise ValueError("No subtitle data available for burn-in")
 
         if show_source and not original_result:
@@ -192,7 +198,7 @@ class VideoBurnService:
             raise ValueError("Target subtitle data not found")
 
         ass_content = subtitle_formatter.to_ass(
-            result=result or original_result,
+            result=result or original_result or TranscriptionResult(video_source="", language="", segments=[]),
             original_result=original_result if show_source else None,
             source_color=style.get("sourceColor"),
             target_color=style.get("targetColor"),
@@ -206,6 +212,11 @@ class VideoBurnService:
             font_family=style.get("fontFamily"),
         )
 
+        if end_note_enabled:
+            if video_duration <= 0:
+                raise ValueError("Video duration is required for the end note")
+            ass_content = self._append_end_note(ass_content, video_duration, playres_x, playres_y, dubbed)
+
         ass_path = temp_dir / f"burn_{task['task_id']}.ass"
         with open(ass_path, "w", encoding="utf-8-sig") as f:
             f.write(ass_content)
@@ -213,8 +224,27 @@ class VideoBurnService:
         # Log first few lines of ASS for debugging subtitle width
         logger.info(f"ASS file generated at {ass_path}, first 15 lines:\n" + "\n".join(ass_content.splitlines()[:15]))
 
-        duration = max(self._get_duration(original_result), self._get_duration(result))
+        duration = max(video_duration, self._get_duration(original_result), self._get_duration(result))
         return ass_path, duration
+
+    @staticmethod
+    def _append_end_note(content: str, duration: float, width: int, height: int, dubbed: bool) -> str:
+        """Overlay a visual-only credit during the existing final three seconds."""
+        font_size = max(12, min(30, round(width * 0.0125)))
+        margin = max(12, round(width * 0.03))
+        top = max(12, round(height * 0.04))
+        start = subtitle_formatter._format_timestamp(max(0, duration - 3), "ass")
+        end = subtitle_formatter._format_timestamp(duration, "ass")
+        description = "AI-assisted translation and dubbing with Video Translator" if dubbed else "AI-assisted translation with Video Translator"
+        style = (
+            f"Style: EndNote,Arial,{font_size},&H00FFFFFF,&H00000000,&H00000000,&H60000000,"
+            f"0,0,0,0,100,100,0,0,3,6,0,9,{margin},{margin},{top},1"
+        )
+        event = (
+            f"Dialogue: 1,{start},{end},EndNote,,0,0,0,,"
+            f"{{\\an9\\pos({width - margin},{top})}}{description}\\N{END_NOTE_URL}"
+        )
+        return content.replace("\n[Events]", f"\n{style}\n\n[Events]", 1) + "\n" + event
 
     def _parse_time(self, time_str: str) -> float:
         parts = time_str.split(":")
@@ -240,6 +270,7 @@ class VideoBurnService:
         target_lang: Optional[str] = None,
         video_path_override: Optional[str] = None,
         output_field: str = "burn_path",
+        end_note_enabled: bool = False,
     ) -> str:
         if output_field not in {"burn_path", "dubbing_video_path"}:
             raise ValueError("Unsupported burn output field")
@@ -265,11 +296,14 @@ class VideoBurnService:
             source_profile = self._probe_video_profile(video_path_obj)
             history_manager.update_task(task_id, {"source_video_profile": source_profile})
             video_width, video_height = source_profile["width"], source_profile["height"]
-            ass_path, duration = self._generate_ass(task, show_source, show_target, style, temp_dir, target_lang, video_width, video_height)
+            ass_path, duration = self._generate_ass(
+                task, show_source, show_target, style, temp_dir, target_lang, video_width, video_height,
+                end_note_enabled, source_profile.get("duration") or 0, output_field == "dubbing_video_path",
+            )
 
             stem = Path(task["filename"]).stem
             ts = time.strftime("%Y%m%d_%H%M%S")
-            suffix = "dubbed_subtitled" if output_field == "dubbing_video_path" else "burned"
+            suffix = ("dubbed_subtitled" if show_source or show_target else "dubbed_endnote") if output_field == "dubbing_video_path" else "burned"
             output_name = f"{stem}_{suffix}_{ts}.mp4"
             output_path = settings.OUTPUT_DIR / output_name
             settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

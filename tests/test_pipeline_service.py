@@ -105,8 +105,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             })
             burn_calls = []
 
-            async def burn(task_id, language, source, target, style, video_path):
-                burn_calls.append((task_id, language, source, target, style, video_path))
+            async def burn(task_id, language, source, target, style, video_path, end_note_enabled):
+                burn_calls.append((task_id, language, source, target, style, video_path, end_note_enabled))
                 history.task["dubbing_video_path"] = str(burned_video)
 
             service = PipelineService(burn_stage=burn)
@@ -120,10 +120,43 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             burn_calls,
-            [("one", "Chinese", True, True, style, raw_video)],
+            [("one", "Chinese", True, True, style, raw_video, False)],
         )
         self.assertEqual(history.task["dubbing_video_path"], str(burned_video))
         self.assertTrue(history.task["dubbing_burn_subtitles"])
+
+    async def test_end_note_renders_without_subtitles_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            translation = root / "zh.json"; translation.touch()
+            audio = root / "dub.wav"; audio.touch()
+            raw_video = root / "raw.mp4"; raw_video.touch()
+            final_video = root / "final.mp4"; final_video.touch()
+            history = History({
+                "task_id": "one", "transcription_path": str(translation),
+                "translations": {"Chinese": str(translation)},
+                "dubbing_status": "completed", "dubbing_target_lang": "Chinese",
+                "dubbing_voice": "voice", "dubbing_speed": 1.0,
+                "dubbing_audio_path": str(audio), "dubbing_raw_video_path": str(raw_video),
+                "dubbing_video_path": str(raw_video),
+            })
+            calls = []
+
+            async def burn(*args):
+                calls.append(args)
+                history.task["dubbing_video_path"] = str(final_video)
+
+            service = PipelineService(burn_stage=burn)
+            with patch("app.services.pipeline_service.history_manager", history), patch("app.services.pipeline_service.emit_event"):
+                await service.run("one", "Chinese", "voice", end_note_enabled=True)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0][2:4], (False, False))
+                self.assertTrue(calls[0][-1])
+                self.assertFalse(history.task["dubbing_burn_subtitles"])
+                self.assertTrue(history.task["dubbing_end_note_enabled"])
+                await service.run("one", "Chinese", "voice", end_note_enabled=False)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(history.task["dubbing_video_path"], str(raw_video))
 
     async def test_resume_skips_existing_outputs(self):
         with tempfile.TemporaryDirectory() as directory:

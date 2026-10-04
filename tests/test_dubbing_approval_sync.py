@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from app.api.pipeline import CompressionDecision, decide_compression
+from app.api.pipeline import CompressionDecision, PipelineRequest, decide_compression
+from app.api.burn import BurnRequest
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.services.dubbing_service import DubbingCompressionRequired, DubbingService
 from app.services.pipeline_service import PipelineService
@@ -21,6 +22,11 @@ class _History:
 
 
 class DubbingApprovalTests(unittest.IsolatedAsyncioTestCase):
+    def test_video_end_note_defaults_on_and_can_be_disabled(self):
+        self.assertTrue(PipelineRequest(task_id="one").end_note_enabled)
+        self.assertTrue(BurnRequest(task_id="one").end_note_enabled)
+        self.assertFalse(PipelineRequest(task_id="one", end_note_enabled=False).end_note_enabled)
+
     def test_speed_caps_are_total_speech_speed(self):
         self.assertEqual(DubbingService._post_tts_tempo_cap("qwen", 1.0), 1.6)
         self.assertEqual(DubbingService._post_tts_tempo_cap("kokoro", 1.0), 1.4)
@@ -46,10 +52,11 @@ class DubbingApprovalTests(unittest.IsolatedAsyncioTestCase):
             with patch("app.services.pipeline_service.history_manager", history), patch(
                 "app.services.pipeline_service.emit_event"
             ):
-                await service.run("one", "Chinese", "voice")
+                await service.run("one", "Chinese", "voice", end_note_enabled=True)
             self.assertEqual(history.task["pipeline_status"], "awaiting_compression")
             self.assertEqual(history.task["translations"]["Chinese"], str(translated))
             self.assertEqual(history.task["compression_request"]["segment_indices"], [0])
+            self.assertTrue(history.task["compression_request"]["end_note_enabled"])
 
     async def test_decline_keeps_original_translation(self):
         history = _History({"task_id": "one", "pipeline_status": "awaiting_compression",
@@ -64,7 +71,7 @@ class DubbingApprovalTests(unittest.IsolatedAsyncioTestCase):
     async def test_approval_resumes_only_the_requested_task(self):
         request = {"segment_indices": [0], "target_lang": "Chinese", "voice": "voice", "speed": 1.0,
                    "burn_subtitles": False, "show_source": False, "show_target": True,
-                   "subtitle_style": {}, "subtitle_format": "srt"}
+                   "subtitle_style": {}, "subtitle_format": "srt", "end_note_enabled": False}
         history = _History({"task_id": "one", "pipeline_status": "awaiting_compression",
                             "compression_request": request})
         with patch("app.api.pipeline.history_manager", history), patch(
@@ -74,6 +81,7 @@ class DubbingApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "started")
         self.assertTrue(start.call_args.kwargs["compress_translation"])
         self.assertTrue(start.call_args.kwargs["force_dub"])
+        self.assertFalse(start.call_args.kwargs["end_note_enabled"])
 
     async def test_compression_changes_only_approved_row_and_keeps_original_model(self):
         service = TranslationService()

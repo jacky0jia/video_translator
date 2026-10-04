@@ -171,6 +171,11 @@ async def translate_transcription(
             pipeline_translation_targets = list(task.get("pipeline_translation_targets") or [])
             if pipeline and target_lang not in pipeline_translation_targets:
                 pipeline_translation_targets.append(target_lang)
+            alignment_review = dict(task.get("translation_alignment_review") or {})
+            alignment_review[target_lang] = {
+                "rows": translated_result.alignment_review_rows,
+                "check_incomplete": translated_result.alignment_check_incomplete,
+            }
             final_status = "pipeline_translated" if pipeline else "completed"
             history_manager.update_task(
                 task_id,
@@ -181,9 +186,12 @@ async def translate_transcription(
                     "translations": translations,
                     "translation_profiles": translation_profiles,
                     "pipeline_translation_targets": pipeline_translation_targets,
+                    "translation_alignment_review": alignment_review,
                 },
             )
-            emit_event(task_id, {"status": final_status, "message": "completed", "target_lang": target_lang})
+            emit_event(task_id, {"status": final_status, "message": "completed", "target_lang": target_lang,
+                                 "alignment_review_rows": translated_result.alignment_review_rows,
+                                 "alignment_check_incomplete": translated_result.alignment_check_incomplete})
 
         return {
             "status": "success",

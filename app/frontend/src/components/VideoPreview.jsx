@@ -3,6 +3,8 @@ import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 import ProgressBar from './ProgressBar';
 import SubtitleStyleControls from './SubtitleStyleControls';
+import { findSubtitleOverlaps, parseSubtitleTime } from '../utils/subtitleTiming';
+import { subtitlePreviewLayout } from '../utils/subtitlePreviewLayout';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -59,7 +61,7 @@ function vpGetLanguageName(code, uiLang) {
   return code;
 }
 
-export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChange, showSource, showTarget, onShowSourceChange, onShowTargetChange, onPreviewLangChange }) {
+export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChange, showSource, showTarget, onShowSourceChange, onShowTargetChange, onPreviewLangChange, onTaskRefresh }) {
   const showToast = useToast();
   const { t, lang: uiLang } = useI18n();
   const videoRef = useRef(null);
@@ -72,10 +74,13 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const [subTarget, setSubTarget] = useState('');
   const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' }
   const [editValue, setEditValue] = useState('');
+  const [editStart, setEditStart] = useState('');
+  const [editEnd, setEditEnd] = useState('');
   const [previewLang, setPreviewLang] = useState('');
   const [subtitleCollapsed, setSubtitleCollapsed] = useState(false);
   const [isIOSFullscreen, setIsIOSFullscreen] = useState(false);
   const [systemFonts, setSystemFonts] = useState([]);
+  const [videoGeometry, setVideoGeometry] = useState({ containerWidth: 0, containerHeight: 0, videoWidth: 0, videoHeight: 0 });
 
   const { offsetY: subtitleOffsetY, fontSize: subtitleFontSize, sourceColor, targetColor, bold, fontFamily } = subtitleStyle || {};
 
@@ -158,6 +163,24 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     if (videoRef.current && task?.filename) {
       videoRef.current.load();
     }
+  }, [task?.task_id]);
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    const video = videoRef.current;
+    if (!wrapper || !video) return;
+    const update = () => {
+      const bounds = wrapper.getBoundingClientRect();
+      setVideoGeometry({
+        containerWidth: bounds.width, containerHeight: bounds.height,
+        videoWidth: video.videoWidth || 1920, videoHeight: video.videoHeight || 1080,
+      });
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(wrapper);
+    video.addEventListener('loadedmetadata', update);
+    update();
+    return () => { observer.disconnect(); video.removeEventListener('loadedmetadata', update); };
   }, [task?.task_id]);
 
   // Track fullscreen state to keep subtitles visible
@@ -246,6 +269,14 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   };
 
   const startEdit = (index, field) => {
+    if (field === 'time') {
+      const segment = sourceSegments[index];
+      if (!segment) return;
+      setEditStart(formatTime(segment.start));
+      setEditEnd(formatTime(segment.end));
+      setEditingCell({ index, field });
+      return;
+    }
     const text = field === 'source'
       ? sourceSegments[index]?.text || ''
       : targetSegments[index]?.text || '';
@@ -262,6 +293,18 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     }
     if (field === 'target' && targetSegments[index]?.text !== editValue) {
       payload.target_text = editValue;
+    }
+    if (field === 'time') {
+      const start = parseSubtitleTime(editStart);
+      const end = parseSubtitleTime(editEnd);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+        showToast(t('invalidSubtitleTime'), 'error');
+        return;
+      }
+      if (sourceSegments[index]?.start !== start || sourceSegments[index]?.end !== end) {
+        payload.start = start;
+        payload.end = end;
+      }
     }
     if (Object.keys(payload).length === 0) {
       setEditingCell(null);
@@ -289,12 +332,17 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           return next;
         });
       }
+      if (payload.start !== undefined) {
+        setSourceSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
+        setTargetSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
+      }
       setEditingCell(null);
+      await onTaskRefresh?.(task.task_id);
     } else {
       const err = await res.json().catch(() => ({}));
       showToast(t('save') + ' ' + (err.detail || t('unknownError')), 'error');
     }
-  }, [task, editingCell, editValue, sourceSegments, targetSegments, t, showToast]);
+  }, [task, editingCell, editValue, editStart, editEnd, sourceSegments, targetSegments, t, showToast, onTaskRefresh]);
 
   const cancelEdit = () => setEditingCell(null);
 
@@ -305,6 +353,11 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   }
 
   const maxLen = Math.max(sourceSegments.length, targetSegments.length);
+  const activeReview = task?.translation_alignment_review?.[previewLang || task?.target_lang] || {};
+  const reviewRows = new Set(activeReview.rows || []);
+  const overlapPairs = findSubtitleOverlaps(sourceSegments);
+  const overlapRows = new Set(overlapPairs.flat());
+  const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
   const isProcessing = !['transcribed', 'completed', 'failed', 'translation_failed', 'cancelled'].includes(task.status);
 
   return (
@@ -345,15 +398,11 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
         </button>
         <div
           ref={subtitleRef}
-          className={`text-center pointer-events-none space-y-1 px-4 ${
-            isFullscreen || isIOSFullscreen
-              ? 'fixed left-0 right-0 z-[9999]'
-              : 'absolute left-0 right-0'
-          }`}
-          style={{ bottom: (isFullscreen || isIOSFullscreen) ? `${80 + (subtitleOffsetY || 0)}px` : `${64 + (subtitleOffsetY || 0)}px` }}
+          className="absolute left-1/2 z-[9999] -translate-x-1/2 text-center pointer-events-none break-words"
+          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth}px`, paddingInline: '5%' }}
         >
-          {showSource && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] max-h-24 overflow-hidden break-words leading-snug ${bold ? 'font-bold' : 'font-semibold'}`} style={{ fontSize: `${subtitleFontSize || 18}px`, color: sourceColor || '#FFFFFF', fontFamily: fontFamily || 'Arial' }}>{subSource}</div>}
-          {showTarget && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] max-h-20 overflow-hidden break-words leading-snug ${bold ? 'font-bold' : 'font-medium'}`} style={{ fontSize: `${Math.max(12, (subtitleFontSize || 18) - 2)}px`, color: targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{subTarget}</div>}
+          {showSource && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, marginBottom: showTarget ? `${previewLayout.lineGap}px` : 0, color: sourceColor || '#FFFFFF', fontFamily: fontFamily || 'Arial' }}>{subSource}</div>}
+          {showTarget && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, color: targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{subTarget}</div>}
         </div>
       </div>
 
@@ -382,6 +431,15 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">
+        {overlapPairs.length > 0 && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t('subtitleOverlapNotice')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">{overlapPairs.map(([first, second]) => <button key={`${first}-${second}`} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => { setSubtitleCollapsed(false); requestAnimationFrame(() => document.getElementById(`subtitle-row-${first}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })); }}>#{first}–#{second}</button>)}</div>
+        </div>}
+        {(reviewRows.size > 0 || activeReview.check_incomplete) && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t('alignmentReviewNotice')}</p>
+          {activeReview.check_incomplete && <p className="mt-1">{t('alignmentAuditUnavailable')}</p>}
+          {reviewRows.size > 0 && <div className="mt-2 flex flex-wrap gap-2">{[...reviewRows].map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => { setSubtitleCollapsed(false); requestAnimationFrame(() => document.getElementById(`subtitle-row-${row}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })); }}>#{row}</button>)}</div>}
+        </div>}
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-300">{t('subtitleTimeline')}</h3>
           <button
@@ -412,19 +470,24 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const tgt = targetSegments[i];
                 const isEditingSource = editingCell?.index === i && editingCell?.field === 'source';
                 const isEditingTarget = editingCell?.index === i && editingCell?.field === 'target';
+                const isEditingTime = editingCell?.index === i && editingCell?.field === 'time';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i} role="row"
-                    className={`${isEditingSource || isEditingTarget ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
+                  <tr key={i} id={`subtitle-row-${i + 1}`} role="row" title={overlapRows.has(i + 1) ? t('subtitleOverlapRow') : reviewRows.has(i + 1) ? t('alignmentReviewRow') : undefined}
+                    className={`${overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                      {src || tgt ? (
-                        <span
+                      {isEditingTime ? <div className="flex flex-col gap-1">
+                        <input aria-label={t('startTime')} value={editStart} onChange={e => setEditStart(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
+                        <input aria-label={t('endTime')} value={editEnd} onChange={e => setEditEnd(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
+                        <div className="flex gap-1"><button onClick={saveEdit} className="rounded bg-green-600 px-2 py-0.5 text-white">{t('save')}</button><button onClick={cancelEdit} className="rounded bg-gray-500 px-2 py-0.5 text-white">{t('cancel')}</button></div>
+                      </div> : src || tgt ? (
+                        <div className="flex items-center gap-1"><span
                           onClick={() => seekTo((src || tgt).start)}
                           className="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 underline decoration-dotted"
                           title={t('jumpToTime')}
                         >
                           {formatTime((src || tgt).start)} - {formatTime((src || tgt).end)}
-                        </span>
+                        </span>{src && <button type="button" onClick={() => startEdit(i, 'time')} aria-label={`${t('editTime')} #${i + 1}`} title={t('editTime')} className="rounded border border-slate-300 px-1 hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-700">✎</button>}</div>
                       ) : '-'}
                     </td>
                     <td role="cell" data-label={t('source')} className="px-3 py-2">

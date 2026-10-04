@@ -136,7 +136,7 @@ export default function App() {
               <HistoryList tasks={tasks} onSelect={loadTask} onRefresh={fetchTasks} onRetry={retryTask} onDelete={ids => { setTasks(previous => previous.filter(item => !ids.includes(item.task_id))); if (ids.includes(currentTask?.task_id)) setCurrentTask(null); }} onDeleteAll={() => { setTasks([]); setCurrentTask(null); }} highlightTaskId={highlightTaskId} selectedTaskId={currentTask?.task_id} />
             </aside>
 
-            <section data-page="preview" className={`${pageVisible('preview')} min-w-0`}><VideoPreview task={currentTask} subtitleStyle={subtitleStyle} onSubtitleStyleChange={setSubtitleStyle} showSource={showSource} showTarget={showTarget} onShowSourceChange={setShowSource} onShowTargetChange={setShowTarget} /></section>
+            <section data-page="preview" className={`${pageVisible('preview')} min-w-0`}><VideoPreview task={currentTask} subtitleStyle={subtitleStyle} onSubtitleStyleChange={setSubtitleStyle} showSource={showSource} showTarget={showTarget} onShowSourceChange={setShowSource} onShowTargetChange={setShowTarget} onTaskRefresh={refreshTask} /></section>
 
             <aside className={`${rightVisible} min-w-0 flex-col gap-3 lg:max-h-[calc(100vh-7.5rem)] lg:overflow-y-auto`}>
               <div data-page="process" className={mobilePage === 'export' ? 'hidden lg:block' : 'block'}><ControlPanel task={currentTask} onTaskRefresh={refreshTask} subtitleStyle={subtitleStyle} showSource={showSource} showTarget={showTarget} onNavigate={setMobilePage} /></div>

@@ -60,8 +60,8 @@ class VideoBurnService:
             return result.segments[-1].end
         return 0.0
 
-    def _get_video_resolution(self, video_path: Path) -> Tuple[int, int]:
-        """Get video width and height using ffprobe."""
+    def _probe_video_profile(self, video_path: Path) -> Dict[str, Any]:
+        """Record source parameters before subtitle burn requires a re-encode."""
         try:
             ffprobe_path = Path(self.ffmpeg_path).parent / "ffprobe.exe"
             if not ffprobe_path.exists():
@@ -70,20 +70,31 @@ class VideoBurnService:
                 str(ffprobe_path),
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
+                "-show_entries", "stream=codec_name,width,height,bit_rate,avg_frame_rate,pix_fmt,color_space,color_transfer,color_primaries",
                 "-of", "json",
                 str(video_path),
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             data = json.loads(result.stdout)
             stream = data["streams"][0]
-            width = int(stream["width"])
-            height = int(stream["height"])
-            logger.info(f"Video resolution detected: {width}x{height} for {video_path}")
-            return width, height
+            bitrate = stream.get("bit_rate")
+            profile = {
+                "probed": True, "codec": str(stream.get("codec_name") or "unknown"),
+                "width": int(stream["width"]), "height": int(stream["height"]),
+                "bitrate": int(bitrate) if str(bitrate or "").isdigit() else None,
+                "frame_rate": str(stream.get("avg_frame_rate") or "unknown"),
+                "pixel_format": str(stream.get("pix_fmt") or "unknown"),
+                "color_space": str(stream.get("color_space") or "unknown"),
+                "color_transfer": str(stream.get("color_transfer") or "unknown"),
+                "color_primaries": str(stream.get("color_primaries") or "unknown"),
+            }
+            logger.info("Source video profile before subtitle burn: %s", profile)
+            return profile
         except Exception as e:
-            logger.warning(f"Failed to get video resolution, using defaults: {e}")
-            return 1920, 1080
+            logger.warning("Failed to probe source video profile: %s", e)
+            return {"probed": False, "codec": "unknown", "width": 1920, "height": 1080,
+                    "bitrate": None, "frame_rate": "unknown", "pixel_format": "unknown",
+                    "color_space": "unknown", "color_transfer": "unknown", "color_primaries": "unknown"}
 
     def _get_video_bitrate(self, video_path: Path) -> Optional[int]:
         """Return the source video bitrate so burn-in does not inflate files."""
@@ -109,51 +120,33 @@ class VideoBurnService:
             return None
 
     @staticmethod
-    def _video_encode_args(encoder: Optional[str], source_bitrate: Optional[int]) -> list[str]:
-        """Stay near the source size while leaving headroom for scene transitions."""
-        if source_bitrate:
-            # Burning subtitles always requires a full re-encode. A max rate close
-            # to the source average starves sudden scene changes and produces a
-            # short burst of macroblocking. Reserve a little of the average budget
-            # for those peaks, then give the encoder a wider VBV window.
-            target = str(int(source_bitrate * 0.92))
-            maxrate = str(source_bitrate * 3)
-            bufsize = str(source_bitrate * 4)
-            if encoder == "h264_nvenc":
-                return [
-                    "-c:v", encoder, "-preset", "p7", "-tune", "hq", "-rc", "vbr",
-                    "-multipass", "fullres", "-profile:v", "high", "-b:v", target,
-                    "-maxrate", maxrate, "-bufsize", bufsize,
-                    "-spatial_aq", "1", "-temporal_aq", "1", "-rc-lookahead", "32",
-                    "-bf", "3", "-b_ref_mode", "middle",
-                ]
-            if encoder == "h264_qsv":
-                return [
-                    "-c:v", encoder, "-preset", "slow", "-b:v", target,
-                    "-maxrate", maxrate, "-bufsize", bufsize,
-                ]
-            if encoder == "h264_amf":
-                return [
-                    "-c:v", encoder, "-quality", "quality", "-rc", "vbr_peak",
-                    "-b:v", target, "-maxrate", maxrate, "-bufsize", bufsize,
-                ]
-            return [
-                "-c:v", "libx264", "-preset", "slow", "-b:v", target,
-                "-maxrate", maxrate, "-bufsize", bufsize,
-            ]
+    def _video_encode_args(encoder: Optional[str], source_bitrate: Optional[int] = None) -> list[str]:
+        """Use quality-based H.264; AV1/HEVC bitrate is not a safe H.264 target."""
         if encoder == "h264_nvenc":
             return [
-                "-c:v", encoder, "-preset", "p5", "-rc", "vbr",
-                "-cq", "20", "-b:v", "0",
+                "-c:v", encoder, "-preset", "p7", "-tune", "hq", "-rc", "vbr",
+                "-multipass", "fullres", "-cq", "18", "-b:v", "0",
+                "-spatial_aq", "1", "-temporal_aq", "1", "-rc-lookahead", "32",
             ]
         if encoder == "h264_qsv":
-            return ["-c:v", encoder, "-global_quality", "20", "-preset", "medium"]
+            return ["-c:v", encoder, "-global_quality", "18", "-preset", "slow"]
         if encoder == "h264_amf":
             return [
                 "-c:v", encoder, "-quality", "quality", "-rc", "cqp",
-                "-qp_p", "20", "-qp_i", "20",
+                "-qp_p", "18", "-qp_i", "18",
             ]
-        return ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+        return ["-c:v", "libx264", "-preset", "slow", "-crf", "18"]
+
+    @staticmethod
+    def _video_output_args(profile: Dict[str, Any]) -> list[str]:
+        args = ["-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-map_metadata", "0"]
+        for source_key, option in (("color_space", "-colorspace"),
+                                   ("color_transfer", "-color_trc"),
+                                   ("color_primaries", "-color_primaries")):
+            value = profile.get(source_key)
+            if value and value != "unknown":
+                args.extend((option, str(value)))
+        return args
 
     def _generate_ass(
         self,
@@ -269,7 +262,9 @@ class VideoBurnService:
         ass_path: Optional[Path] = None
         lang_display = target_lang or task.get("target_lang") or ""
         try:
-            video_width, video_height = self._get_video_resolution(video_path_obj)
+            source_profile = self._probe_video_profile(video_path_obj)
+            history_manager.update_task(task_id, {"source_video_profile": source_profile})
+            video_width, video_height = source_profile["width"], source_profile["height"]
             ass_path, duration = self._generate_ass(task, show_source, show_target, style, temp_dir, target_lang, video_width, video_height)
 
             stem = Path(task["filename"]).stem
@@ -278,11 +273,11 @@ class VideoBurnService:
             output_name = f"{stem}_{suffix}_{ts}.mp4"
             output_path = settings.OUTPUT_DIR / output_name
             settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            source_bitrate = self._get_video_bitrate(video_path_obj)
-            encode_args = self._video_encode_args(self.gpu_encoder, source_bitrate)
+            encode_args = self._video_encode_args(self.gpu_encoder, source_profile["bitrate"])
+            output_args = self._video_output_args(source_profile)
             logger.info(
-                "Burn rate control: source_video_bitrate=%s encoder=%s args=%s",
-                source_bitrate,
+                "Burn quality: source=%s encoder=%s args=%s",
+                source_profile,
                 self.gpu_encoder or "libx264",
                 encode_args,
             )
@@ -290,7 +285,7 @@ class VideoBurnService:
                 self.ffmpeg_path, "-y", "-i", str(video_path_obj),
                 "-vf", f"ass={ass_path.name}",
                 *encode_args,
-                "-pix_fmt", "yuv420p",
+                *output_args,
                 "-c:a", "copy",
                 str(output_path),
             ]
@@ -336,8 +331,8 @@ class VideoBurnService:
                     cmd = [
                         self.ffmpeg_path, "-y", "-i", str(video_path_obj),
                         "-vf", f"ass={ass_path.name}",
-                        *self._video_encode_args(None, source_bitrate),
-                        "-pix_fmt", "yuv420p",
+                        *self._video_encode_args(None, source_profile["bitrate"]),
+                        *output_args,
                         "-c:a", "copy",
                         str(output_path),
                     ]
@@ -354,8 +349,12 @@ class VideoBurnService:
                     process.wait()
                     stderr_thread.join(timeout=2)
                     if process.returncode == 0:
+                        output_profile = self._probe_video_profile(output_path)
+                        if source_profile["probed"] and output_profile["probed"] and (output_profile["width"], output_profile["height"]) != (video_width, video_height):
+                            raise RuntimeError("Rendered video resolution differs from the source")
                         download_url = self._to_download_url(output_path)
-                        history_manager.update_task(task_id, {"burn_status": "completed", output_field: download_url})
+                        history_manager.update_task(task_id, {"burn_status": "completed", output_field: download_url,
+                                                              "output_video_profile": output_profile})
                         emit_event(task_id, {"status": "burning_completed", "message": "completed", "target_lang": lang_display, "progress": 100})
                         logger.info(f"Burn completed (fallback) for task {task_id}: {output_path}")
                         return download_url
@@ -364,8 +363,12 @@ class VideoBurnService:
                 emit_event(task_id, {"status": "burning_failed", "message": "failed", "target_lang": lang_display, "progress": 0})
                 raise RuntimeError(f"FFmpeg burn failed: {err}")
 
+            output_profile = self._probe_video_profile(output_path)
+            if source_profile["probed"] and output_profile["probed"] and (output_profile["width"], output_profile["height"]) != (video_width, video_height):
+                raise RuntimeError("Rendered video resolution differs from the source")
             download_url = self._to_download_url(output_path)
-            history_manager.update_task(task_id, {"burn_status": "completed", output_field: download_url})
+            history_manager.update_task(task_id, {"burn_status": "completed", output_field: download_url,
+                                                  "output_video_profile": output_profile})
             emit_event(task_id, {"status": "burning_completed", "message": "completed", "target_lang": lang_display, "progress": 100})
             logger.info(f"Burn completed for task {task_id}: {output_path}")
             return download_url

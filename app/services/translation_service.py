@@ -212,6 +212,56 @@ class TranslationService:
                 else:
                     return ["Translation error" for _ in current_batch]
 
+    async def _audit_batch_alignment(
+        self, segments: List[TranscriptionSegment], translations: List[str],
+    ) -> List[int]:
+        """Identify translations that clearly contain adjacent-row meaning."""
+        if len(segments) != len(translations):
+            return list(range(len(segments)))
+        provider_config = self._task_config.get() or self._current_config()
+        pairs = "\n".join(
+            f"{index}. SOURCE: {segment.text}\n   TRANSLATION: {translation}"
+            for index, (segment, translation) in enumerate(zip(segments, translations))
+        )
+        prompt = (
+            "Audit source-to-translation alignment for timed video subtitles. "
+            "Return only zero-based indices whose translation clearly contains meaning from "
+            "an adjacent source row, omits the row's meaning, or belongs to a different row. "
+            "A source fragment may have an incomplete translation fragment; that is valid. "
+            "Be conservative and do not flag stylistic differences. Do not rewrite text. "
+            'Respond as JSON: {"misaligned_indices": []}.\n' + pairs
+        )
+        if provider_config.provider == "lm_studio":
+            response_format = {"type": "json_schema", "json_schema": {
+                "name": "subtitle_alignment", "strict": True,
+                "schema": {"type": "object", "properties": {
+                    "misaligned_indices": {"type": "array", "items": {"type": "integer"}}
+                }, "required": ["misaligned_indices"], "additionalProperties": False},
+            }}
+        else:
+            response_format = {"type": "json_object"}
+        async with self._http_client_factory(
+            timeout=provider_config.timeout_seconds, verify=settings.VERIFY_SSL,
+        ) as client:
+            response = await client.post(
+                provider_config.api_url,
+                headers=self._auth_headers(provider_config.api_key),
+                json={"model": provider_config.model, "messages": [
+                    {"role": "system", "content": "You are a strict subtitle alignment auditor. Return JSON only."},
+                    {"role": "user", "content": prompt},
+                ], "response_format": response_format, "max_tokens": 256, "temperature": 0,
+                    **({"reasoning_effort": "none"} if provider_config.provider == "lm_studio" else {})},
+            )
+            response.raise_for_status()
+            result = self._parse_json_object(response.json()["choices"][0]["message"]["content"])
+        indices = result.get("misaligned_indices")
+        if not isinstance(indices, list) or any(
+            isinstance(index, bool) or not isinstance(index, int)
+            or index < 0 or index >= len(segments) for index in indices
+        ):
+            raise ValueError("Translation alignment audit returned invalid row indices")
+        return sorted(set(indices))
+
     def _build_prompt(
         self,
         current_batch: List[TranscriptionSegment],
@@ -266,6 +316,7 @@ class TranslationService:
             f"1. Maintain the original tone and emotional context.\n"
             f"2. Output only a JSON object with a 'translations' key containing a list of strings in the same order as the target segments.\n"
             f"3. You MUST return EXACTLY {len(current_batch)} translations, one for each target segment. Do NOT merge multiple segments into one translation, even if a segment is very short.\n"
+            "4. Keep each translation aligned to its own source row; do not borrow meaning from an adjacent row.\n"
             f"{dubbing_requirements}"
             f'Example: {{"translations": ["翻译1", "翻译2"]}}\n'
         )
@@ -381,6 +432,8 @@ class TranslationService:
         all_segments = result.segments
         total = len(all_segments)
         translated_texts = []
+        alignment_review_rows: set[int] = set()
+        alignment_check_incomplete = False
         total_batches = (total + batch_size - 1) // batch_size
         provider_name = settings.LLM_PROVIDER
         config_token = None
@@ -456,6 +509,35 @@ class TranslationService:
                                 batch_translations[local_index] = single[0]
                                 break
 
+                    if not any(self._translation_failed(value) for value in batch_translations):
+                        try:
+                            suspect_indices = await self._audit_batch_alignment(current_batch, batch_translations)
+                        except Exception as exc:
+                            logger.warning("Translation alignment audit unavailable for batch %s: %s", batch_idx + 1, exc)
+                            alignment_check_incomplete = True
+                            suspect_indices = []
+                        if suspect_indices:
+                            for local_index in suspect_indices:
+                                row = i + local_index
+                                try:
+                                    candidate = await self.translate_batch(
+                                        [current_batch[local_index]],
+                                        all_segments[max(0, row - 2):row],
+                                        all_segments[row + 1:row + 3],
+                                        target_lang, fit_to_duration=fit_to_duration,
+                                    )
+                                    if len(candidate) == 1 and not self._translation_failed(candidate[0]):
+                                        batch_translations[local_index] = candidate[0]
+                                except Exception as exc:
+                                    logger.warning("Alignment retry for row %s failed: %s", row + 1, exc)
+                            try:
+                                unresolved = await self._audit_batch_alignment(current_batch, batch_translations)
+                            except Exception as exc:
+                                logger.warning("Alignment recheck for batch %s failed: %s", batch_idx + 1, exc)
+                                alignment_check_incomplete = True
+                                unresolved = suspect_indices
+                            alignment_review_rows.update(i + index + 1 for index in unresolved)
+
                     if fit_to_duration:
                         for local_index, (segment, translation) in enumerate(
                             zip(current_batch, batch_translations)
@@ -523,6 +605,8 @@ class TranslationService:
             video_source=result.video_source,
             language=target_lang,
             segments=new_segments,
+            alignment_review_rows=sorted(alignment_review_rows),
+            alignment_check_incomplete=alignment_check_incomplete,
         )
 
 

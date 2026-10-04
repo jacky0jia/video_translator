@@ -179,7 +179,8 @@ class SubtitleFormatter:
         # the bottom of the video, source above target. Use \pos to avoid libass
         # collision handling reordering the lines.
         center_x = playres_x // 2
-        offset_px = margin_v
+        # The preview uses the same 640-unit horizontal reference as font size.
+        offset_px = margin_v * scale
         bottom_y = playres_y - 80 - offset_px
         line_gap = 10
 

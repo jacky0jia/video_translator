@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import math
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -71,6 +72,8 @@ def _delete_output_file(url_or_path: Optional[str], deleted_files: Optional[list
 class SegmentEdit(BaseModel):
     source_text: Optional[str] = None
     target_text: Optional[str] = None
+    start: Optional[float] = None
+    end: Optional[float] = None
 
 
 @router.get("/tasks")
@@ -136,7 +139,11 @@ async def task_events(task_id: str):
         )
 
     return StreamingResponse(
-        event_generator(task_id, initial_data={"status": task.get("status", "unknown")}),
+        event_generator(task_id, initial_data={
+            "status": task.get("status", "unknown"),
+            "message": task.get("message", ""),
+            "progress_percent": task.get("progress_percent"),
+        }),
         media_type="text/event-stream",
     )
 
@@ -151,14 +158,44 @@ async def emit_task_event(task_id: str, status: str, message: str = ""):
 @router.post("/tasks/{task_id}/segments/{index}")
 async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
     """
-    Edit a specific subtitle segment's source and/or target text.
-    Timestamps are preserved; only the text field is modified.
+    Edit a subtitle segment's text or timing. Timing is shared by the source
+    transcription and every saved translation of the same segment.
     """
     task = history_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
     updated = []
+    timing_edit = edit.start is not None or edit.end is not None
+    if timing_edit:
+        if (edit.start is None or edit.end is None or
+                not math.isfinite(edit.start) or not math.isfinite(edit.end) or
+                edit.start < 0 or edit.end <= edit.start):
+            raise HTTPException(status_code=400, detail="Start and end must be valid times with end after start")
+        values = [task.get("transcription_path"), task.get("translation_path")]
+        values.extend((task.get("translations") or {}).values())
+        documents = {}
+        for value in values:
+            if not value:
+                continue
+            path = Path(value)
+            if path in documents:
+                continue
+            if not path.is_file() or not _is_safe_path(path):
+                raise HTTPException(status_code=400, detail="Subtitle file is unavailable")
+            with open(path, "r", encoding="utf-8") as source:
+                data = json.load(source)
+            if not 0 <= index < len(data.get("segments", [])):
+                raise HTTPException(status_code=400, detail="Subtitle row is unavailable")
+            documents[path] = data
+        source_path = Path(task["transcription_path"]) if task.get("transcription_path") else None
+        if source_path not in documents:
+            raise HTTPException(status_code=400, detail="Source transcription is unavailable")
+        for path, data in documents.items():
+            data["segments"][index].update(start=edit.start, end=edit.end)
+            with open(path, "w", encoding="utf-8") as target:
+                json.dump(data, target, ensure_ascii=False, indent=4)
+        updated.append("timing")
 
     # Update source transcription JSON
     if edit.source_text is not None and task.get("transcription_path"):
@@ -182,9 +219,32 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
             segments = data.get("segments", [])
             if 0 <= index < len(segments):
                 segments[index]["text"] = edit.target_text
+                data["alignment_review_rows"] = [
+                    row for row in data.get("alignment_review_rows", []) if row != index + 1
+                ]
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=4)
                 updated.append("target")
+
+    if updated:
+        changes = {"subtitle_outputs": {}}
+        if edit.target_text is not None:
+            alignment_review = dict(task.get("translation_alignment_review") or {})
+            target_lang = task.get("target_lang")
+            if target_lang in alignment_review:
+                review = dict(alignment_review[target_lang])
+                review["rows"] = [row for row in review.get("rows", []) if row != index + 1]
+                alignment_review[target_lang] = review
+                changes["translation_alignment_review"] = alignment_review
+        if task.get("dubbing_audio_path") or task.get("dubbing_video_path") or task.get("burn_path"):
+            changes.update({"outputs_stale": True, "pipeline_status": "stale"})
+            if task.get("status") == "completed":
+                changes["status"] = "transcribed"
+            if task.get("dubbing_status") == "completed":
+                changes["dubbing_status"] = "stale"
+            if task.get("burn_status") == "completed":
+                changes["burn_status"] = "stale"
+        history_manager.update_task(task_id, changes)
 
     if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update or index out of range")

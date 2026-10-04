@@ -223,6 +223,7 @@ class PipelineService:
                 "progress_percent": 100,
                 "failed_stage": None,
                 "cancelled_stage": None,
+                "outputs_stale": False,
             }
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)

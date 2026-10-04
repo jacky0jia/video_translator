@@ -139,6 +139,7 @@ export default function ExportPanel({ task, onNavigate }) {
         <span>{items.length} {t(items.length === 1 ? 'file' : 'files')}</span>
       </div>
       <div className="space-y-2 p-3">
+        {task?.outputs_stale && <p role="note" className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">{t('outputsStaleAfterEdit')}</p>}
         {items.length === 0 ? (
           <EmptyWorkflowState icon="↓" title={t(task ? 'exportWaitingTitle' : 'exportEmptyTitle')} description={t(task ? 'exportWaitingHint' : 'processedFilesHint')} action={t(task ? 'goToProcess' : 'goToTasks')} onAction={() => onNavigate?.(task ? 'process' : 'tasks')} />
         ) : items.map(item => (

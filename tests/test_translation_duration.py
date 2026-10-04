@@ -37,6 +37,13 @@ class TranslationDurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[36, 24]", prompt)
         self.assertIn("pacing targets", prompt)
         self.assertIn("not permission to omit meaning", prompt)
+        self.assertIn("accurately, concisely, and clearly", prompt)
+
+    def test_subtitle_first_translation_also_requests_clear_concise_language(self):
+        service = TranslationService()
+        segment = TranscriptionSegment(start=0, end=2, text="source", confidence=1)
+        prompt = service._build_prompt([segment], [], [], "Chinese")
+        self.assertIn("accurately, concisely, and clearly", prompt)
 
     def test_japanese_spoken_length_excludes_terminal_punctuation(self):
         self.assertEqual(

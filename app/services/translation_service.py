@@ -328,7 +328,7 @@ class TranslationService:
             f"### Target Segments to Translate:\n"
             f"{curr_text}\n\n"
             f"### Requirements:\n"
-            f"1. Maintain the original tone and emotional context.\n"
+            f"1. Translate accurately, concisely, and clearly while maintaining the original tone and emotional context. Preserve all facts, numbers, names, negations, conditions, and causal relationships.\n"
             f"2. Output only a JSON object with a 'translations' key containing a list of strings in the same order as the target segments.\n"
             f"3. You MUST return EXACTLY {len(current_batch)} translations, one for each target segment. Do NOT merge multiple segments into one translation, even if a segment is very short.\n"
             "4. Keep each translation aligned to its own source row; do not borrow meaning from an adjacent row.\n"

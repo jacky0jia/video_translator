@@ -51,7 +51,7 @@ class TranslationDurationTests(unittest.IsolatedAsyncioTestCase):
             {"translation": "ここで休みます。"},
         )
 
-    async def test_over_budget_translation_is_compressed_before_result(self):
+    async def test_over_budget_translation_is_preserved_until_approval(self):
         service = TranslationService()
         source = TranscriptionResult(
             video_source="fixture.mp4",
@@ -74,8 +74,8 @@ class TranslationDurationTests(unittest.IsolatedAsyncioTestCase):
             source, "Japanese", batch_size=1, fit_to_duration=True
         )
 
-        self.assertEqual(result.segments[0].text, "短い自然な訳です。")
-        self.assertEqual(compression_calls[0][1:], ("Japanese", 24, "long source"))
+        self.assertEqual(result.segments[0].text, "長" * 40)
+        self.assertEqual(compression_calls, [])
 
     async def test_uncompressible_dubbing_translation_reaches_real_synthesis_measurement(self):
         service = TranslationService()

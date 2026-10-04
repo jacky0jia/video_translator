@@ -120,6 +120,37 @@ class PipelineService:
         from app.services.dubbing_service import dubbing_service
         await asyncio.to_thread(dubbing_service.dub, task_id, target_lang, voice, speed, None)
 
+    async def _compress_translation(self, task_id: str, target_lang: str) -> None:
+        import json
+        from app.core.schemas import TranscriptionResult
+        from app.services.translation_service import translation_service
+
+        task = history_manager.get_task(task_id) or {}
+        request = task.get("compression_request") or {}
+        source_path = Path(task.get("transcription_path") or "")
+        translation_path = Path((task.get("translations") or {}).get(target_lang) or "")
+        if not source_path.is_file() or not translation_path.is_file():
+            raise RuntimeError("压缩前的转录或译文文件已丢失；原译文未修改")
+        source = TranscriptionResult(**json.loads(source_path.read_text(encoding="utf-8")))
+        current = TranscriptionResult(**json.loads(translation_path.read_text(encoding="utf-8")))
+        compressed, changed = await translation_service.compress_for_dubbing(
+            source, current, request.get("segment_indices") or [], target_lang, task_id
+        )
+        attempt = int(task.get("compression_attempts") or 0) + 1
+        settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = settings.OUTPUT_DIR / f"{translation_path.stem}_compact_{attempt}.json"
+        output_path.write_text(compressed.model_dump_json(indent=4), encoding="utf-8")
+        translations = dict(task.get("translations") or {})
+        translations[target_lang] = str(output_path)
+        revisions = list(task.get("compression_revisions") or [])
+        revisions.append({"previous_path": str(translation_path),
+                          "compressed_path": str(output_path), "changed_indices": changed})
+        history_manager.update_task(task_id, {
+            "translation_path": str(output_path), "translations": translations,
+            "subtitle_outputs": {}, "compression_attempts": attempt,
+            "compression_revisions": revisions, "compression_request": None,
+        })
+
     async def _default_burn(
         self,
         task_id: str,
@@ -154,6 +185,7 @@ class PipelineService:
         subtitle_format: str = "srt",
         force_translate: bool = False,
         force_dub: bool = False,
+        compress_translation: bool = False,
     ) -> None:
         try:
             task = history_manager.get_task(task_id)
@@ -176,10 +208,14 @@ class PipelineService:
                 stage = self._translate_stage or self._default_translate
                 await stage(task_id, target_lang)
 
+            if compress_translation:
+                self._set_stage(task_id, "pipeline_translating", "正在精简已确认的译文...", 60)
+                await self._compress_translation(task_id, target_lang)
+
             task = history_manager.get_task(task_id) or {}
             subtitle_path = (task.get("subtitle_outputs") or {}).get(subtitle_format)
             if task.get("translation_path") and (
-                force_translate or not self._artifact_exists(subtitle_path)
+                force_translate or compress_translation or not self._artifact_exists(subtitle_path)
             ):
                 stage = self._export_stage or self._default_export
                 await stage(task_id, target_lang, subtitle_format)
@@ -236,12 +272,32 @@ class PipelineService:
             emit_event(task_id, data)
             raise
         except Exception as exc:
+            from app.services.dubbing_service import DubbingCompressionRequired
+            if isinstance(exc, DubbingCompressionRequired):
+                task = history_manager.get_task(task_id) or {}
+                if int(task.get("compression_attempts") or 0) < 2 and exc.segment_indices:
+                    data = {
+                        "status": "awaiting_compression", "pipeline_status": "awaiting_compression",
+                        "pipeline_stage": "pipeline_dubbing", "message": str(exc),
+                        "compression_request": {
+                            "segment_indices": exc.segment_indices, "target_lang": target_lang,
+                            "voice": voice, "speed": speed, "burn_subtitles": burn_subtitles,
+                            "show_source": show_source, "show_target": show_target,
+                            "subtitle_style": subtitle_style or {}, "subtitle_format": subtitle_format,
+                        },
+                    }
+                    history_manager.update_task(task_id, data)
+                    emit_event(task_id, data)
+                    return
+                if int(task.get("compression_attempts") or 0) >= 2:
+                    exc = RuntimeError("两轮译文精简后仍无法保持字幕同步。请手动检查译文或更换音色。")
             logger.exception("Pipeline failed for task %s", task_id)
             task = history_manager.get_task(task_id) or {}
             data = {
                 "status": "failed", "pipeline_status": "failed",
                 "message": self._error_message(exc, task),
                 "failed_stage": task.get("pipeline_stage"),
+                "dubbing_status": "failed", "compression_request": None,
             }
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)
@@ -261,6 +317,7 @@ class PipelineService:
         subtitle_format: str = "srt",
         force_translate: bool = False,
         force_dub: bool = False,
+        compress_translation: bool = False,
     ) -> asyncio.Task:
         current = self._tasks.get(task_id)
         if current and not current.done():
@@ -278,6 +335,7 @@ class PipelineService:
                 subtitle_format,
                 force_translate,
                 force_dub,
+                compress_translation,
             ),
             name=f"pipeline-{task_id}",
         )

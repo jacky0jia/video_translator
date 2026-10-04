@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import unicodedata
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -131,6 +132,7 @@ class TranslationService:
         target_lang: str = "Chinese",
         fit_to_duration: bool = False,
         strict_length: bool = False,
+        existing_translations: List[str] | None = None,
     ) -> List[str]:
         """
         Translates a batch of segments using a sliding window approach for context.
@@ -143,6 +145,7 @@ class TranslationService:
             current_batch, prev_context, next_context, target_lang,
             fit_to_duration=fit_to_duration,
             strict_length=strict_length,
+            existing_translations=existing_translations,
         )
         provider_config = self._task_config.get() or self._current_config()
         # Structured output constrains the shape, but not the length of each
@@ -270,6 +273,7 @@ class TranslationService:
         target_lang: str,
         fit_to_duration: bool = False,
         strict_length: bool = False,
+        existing_translations: List[str] | None = None,
     ) -> str:
         """
         Constructs the sliding window prompt.
@@ -288,7 +292,8 @@ class TranslationService:
             budgets = [self._dubbing_character_budget(seg, target_lang) for seg in current_batch]
             dubbing_requirements = (
                 "4. These translations will be spoken within the original time slots. "
-                "Use concise, natural spoken language and remove verbal redundancy, while preserving every "
+                "First be accurate, then concise and clear: express the full meaning in natural spoken "
+                "language with no unnecessary filler or repetition, while preserving every "
                 "fact, name, number, qualification, negation, and causal relationship from the source.\n"
                 f"5. Preferred character targets for translations 0..{len(budgets) - 1}: {budgets}. "
                 "These are pacing targets, not permission to omit meaning. If a target cannot be met without "
@@ -303,6 +308,16 @@ class TranslationService:
                 dubbing_requirements += (
                     "6. A previous result missed its pacing target. Rephrase it more compactly without "
                     "summarizing away information. Preserve meaning rather than forcing the character target.\n"
+                )
+            if existing_translations is not None:
+                current_text = "\n".join(f"{i}. {value}" for i, value in enumerate(existing_translations))
+                dubbing_requirements += (
+                    "The following existing translations were measured as too long for speech. "
+                    "Rewrite each one more compactly, aiming for 15-25% fewer characters. "
+                    "Keep the original meaning as faithfully as possible: do not remove or alter any "
+                    "fact, name, number, negation, condition, qualification, or causal relationship. "
+                    "If a row cannot be shortened safely, return it unchanged; never invent or omit information.\n"
+                    f"Existing translations:\n{current_text}\n"
                 )
 
         prompt = (
@@ -353,6 +368,70 @@ class TranslationService:
     def _translation_failed(value: object) -> bool:
         text = str(value or "").strip()
         return not text or text in _TRANSLATION_FAILURE_MARKERS
+
+    @staticmethod
+    def _safe_shorter_translation(previous: str, proposed: str) -> bool:
+        before, after = previous.strip(), proposed.strip()
+        if not before or not after or len(after) >= len(before):
+            return False
+        protected = re.findall(r"\d+(?:[.,]\d+)?|\b[A-Z]{2,}\b", before)
+        if any(token not in after for token in protected):
+            return False
+        negations = ("不", "没", "未", "无", "非", "not", "never", "without")
+        if any(marker in before.lower() for marker in negations) and not any(
+            marker in after.lower() for marker in negations
+        ):
+            return False
+        logical_markers = (
+            (("如果", "若", "if"), ("如果", "若", "if")),
+            (("除非", "unless"), ("除非", "unless")),
+            (("因为", "由于", "because"), ("因为", "由于", "因", "because")),
+        )
+        for originals, equivalents in logical_markers:
+            if any(marker in before.lower() for marker in originals) and not any(
+                marker in after.lower() for marker in equivalents
+            ):
+                return False
+        return True
+
+    async def compress_for_dubbing(
+        self, source: TranscriptionResult, translated: TranscriptionResult,
+        segment_indices: List[int], target_lang: str, task_id: str,
+    ) -> tuple[TranscriptionResult, List[int]]:
+        """After explicit approval, shorten only measured overlong translations."""
+        if len(source.segments) != len(translated.segments):
+            raise ValueError("转录与译文的字幕行数不一致，无法安全压缩")
+        selected = sorted(set(segment_indices))
+        if not selected or any(index < 0 or index >= len(source.segments) for index in selected):
+            raise ValueError("没有可安全压缩的字幕行")
+        rewritten = list(translated.segments)
+        changed: List[int] = []
+        config_token = None
+        try:
+            async with provider_stage(
+                self._lifecycle, task_id=task_id, stage="translation",
+                provider=self.provider_name or settings.LLM_PROVIDER,
+            ):
+                config_token = self._task_config.set(self._current_config())
+                for index in selected:
+                    previous = translated.segments[index].text
+                    candidates = await self.translate_batch(
+                        [source.segments[index]],
+                        source.segments[max(0, index - 2):index],
+                        source.segments[index + 1:index + 3], target_lang,
+                        fit_to_duration=True, strict_length=True,
+                        existing_translations=[previous],
+                    )
+                    if len(candidates) != 1 or not self._safe_shorter_translation(previous, candidates[0]):
+                        continue
+                    rewritten[index] = translated.segments[index].model_copy(update={"text": candidates[0].strip()})
+                    changed.append(index)
+        finally:
+            if config_token is not None:
+                self._task_config.reset(config_token)
+        if not changed:
+            raise ValueError("未找到既能缩短又能保留关键信息的译文，原译文已保留")
+        return translated.model_copy(update={"segments": rewritten}), changed
 
     async def _compress_for_dubbing(
         self,
@@ -538,46 +617,8 @@ class TranslationService:
                                 unresolved = suspect_indices
                             alignment_review_rows.update(i + index + 1 for index in unresolved)
 
-                    if fit_to_duration:
-                        for local_index, (segment, translation) in enumerate(
-                            zip(current_batch, batch_translations)
-                        ):
-                            budget = self._dubbing_character_budget(segment, target_lang)
-                            spoken_length = self._dubbing_spoken_length(
-                                translation, target_lang
-                            )
-                            if spoken_length <= budget:
-                                continue
-                            logger.info(
-                                "Dubbing translation exceeds slot budget (%s > %s); requesting compression",
-                                spoken_length, budget,
-                            )
-                            shortest = translation
-                            shortest_length = spoken_length
-                            for _ in range(2):
-                                compressed = await self._compress_for_dubbing(
-                                    translation,
-                                    target_lang,
-                                    budget,
-                                    source_text=segment.text,
-                                )
-                                compressed_length = self._dubbing_spoken_length(
-                                    compressed, target_lang
-                                )
-                                if compressed_length < shortest_length:
-                                    shortest = compressed
-                                    shortest_length = compressed_length
-                                if shortest_length <= budget:
-                                    break
-                            if shortest_length > budget:
-                                logger.warning(
-                                    "Segment %s remains above its estimated spoken-time budget "
-                                    "(%s > %s); deferring the final fit decision to measured TTS audio",
-                                    i + local_index + 1,
-                                    shortest_length,
-                                    budget,
-                                )
-                            batch_translations[local_index] = shortest
+                    # Character budgets are only a prompt hint. Do not rewrite a
+                    # valid translation before measuring the actual TTS audio.
 
                     translated_texts.extend(batch_translations)
 

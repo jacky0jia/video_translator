@@ -121,6 +121,16 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, [task?.task_id, t]);
 
   useEffect(() => {
+    if (task?.pipeline_status !== 'awaiting_compression') return;
+    const restored = deriveTaskProcessingState(task, t);
+    setProgress(restored.progress);
+    setCurrentStage(restored.currentStage);
+    setMessage(restored.message);
+    setStatus(restored.status);
+    setRunning(false);
+  }, [task?.pipeline_status, task?.compression_request, t]);
+
+  useEffect(() => {
     if (!STANDALONE_TRANSCRIPTION_STATUSES.has(task?.status)) return;
     if (task?.pipeline_status === 'processing' || task?.dubbing_status === 'processing' || task?.burn_status === 'processing') return;
     const live = deriveTaskProcessingState(task, t);
@@ -216,6 +226,14 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       refresh()
         .catch(() => {})
         .finally(() => showToast('Processing completed', 'success'));
+    }
+    if (event.pipeline_status === 'awaiting_compression') {
+      setRunning(false);
+      setStatus('awaiting_compression');
+      setCurrentStage('dub');
+      setMessage(t('compressionApprovalRequired'));
+      refresh().catch(() => {});
+      return;
     }
     if (event.pipeline_status === 'failed' || event.status === 'failed' || event.status === 'translation_failed') {
       setRunning(false);
@@ -354,8 +372,31 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     if (!response.ok) showToast(t('pipelineCancelFailed'), 'error');
   };
 
+  const decideCompression = async approve => {
+    const response = await fetch(`/api/pipeline/${task.task_id}/compression`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      showToast(data.detail || t('compressionDecisionFailed'), 'error');
+      return;
+    }
+    if (approve) {
+      setRunning(true);
+      setStatus('processing');
+      setCurrentStage('translate');
+      setMessage(t('compressingTranslation'));
+    } else {
+      setRunning(false);
+      setStatus('failed');
+      setMessage(t('compressionDeclined'));
+    }
+    await refresh();
+  };
+
   return {
-    burn, cancel, completedStages, currentStage, format, matchingVoices, message, progress,
+    burn, cancel, completedStages, currentStage, decideCompression, format, matchingVoices, message, progress,
     requiredStages, retryFailedStage, route, run, running, setBurn, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
     subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,

@@ -59,12 +59,14 @@ ALIGNMENT_TEMPO_PERCENTILE = 0.75
 MAX_GAP_BORROW_SECONDS = 0.5
 MIN_INTER_SEGMENT_GAP_SECONDS = 0.08
 TRIM_FADE_SECONDS = 0.04
-NATURAL_MAX_UNIFORM_TEMPO = 1.1
-NATURAL_MAX_ADJUSTABLE_TEMPO = 1.12
+NATURAL_MAX_UNIFORM_TEMPO = 1.60
+NATURAL_MAX_ADJUSTABLE_TEMPO = 1.25
+NATURAL_MAX_KOKORO_TEMPO = 1.40
+NATURAL_MAX_EDGE_TEMPO = 1.40
 NATURAL_SENTENCE_GAP_SECONDS = 0.32
 NATURAL_MIN_SENTENCE_GAP_SECONDS = 0.20
 NATURAL_MAX_UTTERANCE_LEAD_SECONDS = 0.6
-NATURAL_MAX_FINAL_LEAD_SECONDS = 1.0
+NATURAL_MAX_SYNC_LAG_SECONDS = 1.5
 NATURAL_MAX_GROUP_SECONDS = 12.0
 TTS_BOUNDARY_THRESHOLD_DB = -60
 TTS_LEADING_SAFETY_SECONDS = 0.04
@@ -75,6 +77,14 @@ _CLONE_EXTS = (".wav", ".mp3", ".flac", ".ogg", ".m4a")
 
 class DubbingCancelled(RuntimeError):
     pass
+
+
+class DubbingCompressionRequired(ValueError):
+    """Measured speech cannot fit and stay synchronized without shorter text."""
+
+    def __init__(self, message: str, segment_indices: List[int]):
+        super().__init__(message)
+        self.segment_indices = segment_indices
 
 
 def _is_kokoro_mode() -> bool:
@@ -556,6 +566,7 @@ class DubbingService:
         """Combine subtitle fragments into sentence-sized TTS utterances."""
         groups: List = []
         current: List = []
+        current_indices: List[int] = []
 
         def flush() -> None:
             if not current:
@@ -571,11 +582,13 @@ class DubbingService:
                         start=float(current[0].start),
                         end=float(current[-1].end),
                         text=text,
+                        segment_indices=tuple(current_indices),
                     )
                 )
             current.clear()
+            current_indices.clear()
 
-        for segment in segments:
+        for index, segment in enumerate(segments):
             if not (segment.text or "").strip():
                 continue
             if current:
@@ -584,6 +597,7 @@ class DubbingService:
                 if gap > 0.75 or prospective_duration > NATURAL_MAX_GROUP_SECONDS:
                     flush()
             current.append(segment)
+            current_indices.append(index)
             if self._is_sentence_end(segment.text):
                 flush()
         flush()
@@ -636,31 +650,78 @@ class DubbingService:
         return out_wav
 
     @staticmethod
-    def _natural_timeline_end(
-        segments: List,
-        durations: List[float],
-        tempo_ratio: float,
+    def _natural_timeline_plan(
+        segments: List, durations: List[float], tempo_ratio: float,
         sentence_gap: float = NATURAL_SENTENCE_GAP_SECONDS,
-        total_duration: float | None = None,
         lead_seconds: float = 0.0,
-    ) -> float:
+    ) -> tuple[List[tuple[float, float]], float, float]:
         cursor = 0.0
-        has_speech = False
-        last_index = len(segments) - 1
-        for index, (segment, duration) in enumerate(zip(segments, durations)):
-            earliest = cursor + (sentence_gap if has_speech else 0.0)
+        positions: List[tuple[float, float]] = []
+        max_start_lag = 0.0
+        max_end_lag = 0.0
+        for segment, duration in zip(segments, durations):
+            earliest = cursor + (sentence_gap if positions else 0.0)
             preferred_start = max(0.0, float(segment.start) - lead_seconds)
-            if total_duration is not None and index == last_index:
-                latest_fitting_start = total_duration - (duration / tempo_ratio)
-                preferred_start = max(
-                    0.0,
-                    float(segment.start) - NATURAL_MAX_FINAL_LEAD_SECONDS,
-                    min(preferred_start, latest_fitting_start),
-                )
             actual_start = max(preferred_start, earliest)
             cursor = actual_start + (duration / tempo_ratio)
-            has_speech = True
-        return cursor
+            positions.append((actual_start, cursor))
+            max_start_lag = max(max_start_lag, actual_start - float(segment.start))
+            max_end_lag = max(max_end_lag, cursor - float(segment.end))
+        return positions, max_start_lag, max_end_lag
+
+    @classmethod
+    def _natural_timeline_end(
+        cls, segments: List, durations: List[float], tempo_ratio: float,
+        sentence_gap: float = NATURAL_SENTENCE_GAP_SECONDS,
+        total_duration: float | None = None, lead_seconds: float = 0.0,
+    ) -> float:
+        positions, _, _ = cls._natural_timeline_plan(segments, durations, tempo_ratio, sentence_gap, lead_seconds)
+        return positions[-1][1] if positions else 0.0
+
+    @classmethod
+    def _natural_timeline_fits(
+        cls, segments: List, durations: List[float], tempo_ratio: float,
+        sentence_gap: float, total_duration: float, lead_seconds: float,
+    ) -> bool:
+        positions, start_lag, end_lag = cls._natural_timeline_plan(
+            segments, durations, tempo_ratio, sentence_gap, lead_seconds
+        )
+        return ((not positions or positions[-1][1] <= total_duration + 0.01)
+                and start_lag <= NATURAL_MAX_SYNC_LAG_SECONDS
+                and end_lag <= NATURAL_MAX_SYNC_LAG_SECONDS)
+
+    @staticmethod
+    def _post_tts_tempo_cap(provider: str | None, requested_speed: float) -> float:
+        caps = {"qwen": NATURAL_MAX_UNIFORM_TEMPO,
+                "kokoro": NATURAL_MAX_KOKORO_TEMPO,
+                "edge": NATURAL_MAX_EDGE_TEMPO}
+        cap = caps.get(provider, NATURAL_MAX_ADJUSTABLE_TEMPO)
+        if requested_speed <= 0 or requested_speed > cap:
+            raise ValueError(f"{provider} 配音语速超过 {cap:.2f}x 上限")
+        return cap / requested_speed
+
+    @classmethod
+    def _compression_segment_indices(
+        cls, segments: List, durations: List[float], tempo: float,
+        sentence_gap: float, total_duration: float, lead_seconds: float,
+    ) -> List[int]:
+        positions, _, _ = cls._natural_timeline_plan(segments, durations, tempo, sentence_gap, lead_seconds)
+        excesses: List[tuple[float, int]] = []
+        for index, (segment, (_, end)) in enumerate(zip(segments, positions)):
+            deadline = float(segment.end) + NATURAL_MAX_SYNC_LAG_SECONDS
+            if index + 1 < len(segments):
+                deadline = min(deadline, float(segments[index + 1].start)
+                               + NATURAL_MAX_SYNC_LAG_SECONDS - sentence_gap)
+            else:
+                deadline = min(deadline, total_duration)
+            slot = max(float(segment.end) - float(segment.start), 0.1)
+            score = max(0.0, end - deadline) + max(0.0, durations[index] / tempo - slot)
+            if score > 0.05:
+                excesses.append((score, index))
+        if not excesses and segments:
+            excesses = [(durations[index] / tempo, index) for index in range(len(segments))]
+        chosen = [index for _, index in sorted(excesses, reverse=True)[:8]]
+        return sorted({row for index in chosen for row in getattr(segments[index], "segment_indices", ())})
 
     @staticmethod
     def _percentile(values: List[float], percentile: float) -> float:
@@ -700,7 +761,8 @@ class DubbingService:
         raw_paths: List[Path],
         total_duration: float,
         temp_dir: Path,
-        *, provider: str | None = None,
+        *, provider: str | None = None, task_id: str | None = None,
+        requested_speed: float = 1.0,
     ) -> Path:
         """Build a natural, non-overlapping timeline without per-line trimming."""
         fitted_dir = temp_dir / "fitted"
@@ -727,112 +789,79 @@ class DubbingService:
 
         durations = [self._probe_duration(raw) for raw in prepared_paths]
         sentence_gap = NATURAL_SENTENCE_GAP_SECONDS
-        max_uniform_tempo = (
-            NATURAL_MAX_UNIFORM_TEMPO
-            if provider == "qwen"
-            else NATURAL_MAX_ADJUSTABLE_TEMPO
-        )
+        max_uniform_tempo = self._post_tts_tempo_cap(provider, requested_speed)
         natural_end = self._natural_timeline_end(
             segments, durations, 1.0, sentence_gap, total_duration
         )
-        timeline_tempo = 1.0
+        timing = {
+            "video_seconds": round(total_duration, 3),
+            "utterance_count": len(segments),
+            "raw_speech_seconds": round(sum(durations), 3),
+            "tempo_cap": max_uniform_tempo,
+            "effective_tempo_cap": round(max_uniform_tempo * requested_speed, 3),
+            "sync_lag_limit_seconds": NATURAL_MAX_SYNC_LAG_SECONDS,
+        }
+        _, old_start_lag, old_end_lag = self._natural_timeline_plan(segments, durations, 1.0, sentence_gap, 0.0)
+        timing.update({"max_start_lag_at_1x_seconds": round(old_start_lag, 3),
+                       "max_end_lag_at_1x_seconds": round(old_end_lag, 3)})
+        if task_id:
+            history_manager.update_task(task_id, {"dubbing_timing": timing})
+        pacing_options = (
+            (NATURAL_SENTENCE_GAP_SECONDS, 0.0),
+            (NATURAL_SENTENCE_GAP_SECONDS, NATURAL_MAX_UTTERANCE_LEAD_SECONDS),
+            (NATURAL_MIN_SENTENCE_GAP_SECONDS, NATURAL_MAX_UTTERANCE_LEAD_SECONDS),
+        )
+        timeline_tempo = None
         lead_seconds = 0.0
-        if natural_end > total_duration + 0.01:
-            led_end = self._natural_timeline_end(
-                segments,
-                durations,
-                1.0,
-                sentence_gap,
-                total_duration,
-                NATURAL_MAX_UTTERANCE_LEAD_SECONDS,
-            )
-            if led_end <= total_duration + 0.01:
-                low_lead, high_lead = 0.0, NATURAL_MAX_UTTERANCE_LEAD_SECONDS
-                for _ in range(16):
-                    middle_lead = (low_lead + high_lead) / 2
-                    if self._natural_timeline_end(
-                        segments,
-                        durations,
-                        1.0,
-                        sentence_gap,
-                        total_duration,
-                        middle_lead,
-                    ) > total_duration:
-                        low_lead = middle_lead
-                    else:
-                        high_lead = middle_lead
-                lead_seconds = high_lead
+        for candidate_gap, candidate_lead in pacing_options:
+            if not self._natural_timeline_fits(
+                segments, durations, max_uniform_tempo, candidate_gap,
+                total_duration, candidate_lead,
+            ):
+                continue
+            sentence_gap, lead_seconds = candidate_gap, candidate_lead
+            low, high = 1.0, max_uniform_tempo
+            if self._natural_timeline_fits(segments, durations, low, sentence_gap, total_duration, lead_seconds):
+                timeline_tempo = low
             else:
-                lead_seconds = NATURAL_MAX_UTTERANCE_LEAD_SECONDS
-        if self._natural_timeline_end(
-            segments,
-            durations,
-            timeline_tempo,
-            sentence_gap,
-            total_duration,
-            lead_seconds,
-        ) > total_duration + 0.01:
-            fastest_end = self._natural_timeline_end(
-                segments,
-                durations,
-                max_uniform_tempo,
-                sentence_gap,
-                total_duration,
-                lead_seconds,
-            )
-            if fastest_end > total_duration + 0.01:
-                tightest_end = self._natural_timeline_end(
-                    segments,
-                    durations,
-                    max_uniform_tempo,
-                    NATURAL_MIN_SENTENCE_GAP_SECONDS,
-                    total_duration,
-                    lead_seconds,
-                )
-                if tightest_end > total_duration + 0.01:
-                    overflow = tightest_end - total_duration
-                    advice = (
-                        "Qwen 当前固定为 1.00x 合成语速。请精简目标语言译文后重试，"
-                        "或在设置中选择支持调整语速的配音引擎。"
-                        if provider == "qwen" else "请精简译文或提高配音语速后重试。"
-                    )
-                    raise ValueError(
-                        "自然配音内容过长，即使统一加速到 "
-                        f"{max_uniform_tempo:.2f}x 仍超出视频 {overflow:.2f} 秒。"
-                        + advice
-                    )
-                low_gap, high_gap = NATURAL_MIN_SENTENCE_GAP_SECONDS, sentence_gap
-                for _ in range(16):
-                    middle_gap = (low_gap + high_gap) / 2
-                    if self._natural_timeline_end(
-                        segments,
-                        durations,
-                        max_uniform_tempo,
-                        middle_gap,
-                        total_duration,
-                        lead_seconds,
-                    ) <= total_duration:
-                        low_gap = middle_gap
-                    else:
-                        high_gap = middle_gap
-                sentence_gap = low_gap
-                timeline_tempo = max_uniform_tempo
-            else:
-                low, high = 1.0, max_uniform_tempo
-                for _ in range(16):
+                for _ in range(20):
                     middle = (low + high) / 2
-                    if self._natural_timeline_end(
-                        segments,
-                        durations,
-                        middle,
-                        sentence_gap,
-                        total_duration,
-                        lead_seconds,
-                    ) > total_duration:
-                        low = middle
-                    else:
+                    if self._natural_timeline_fits(segments, durations, middle, sentence_gap, total_duration, lead_seconds):
                         high = middle
+                    else:
+                        low = middle
                 timeline_tempo = high
+            break
+        if timeline_tempo is None:
+            positions, cap_start_lag, cap_end_lag = self._natural_timeline_plan(
+                segments, durations, max_uniform_tempo,
+                NATURAL_MIN_SENTENCE_GAP_SECONDS, NATURAL_MAX_UTTERANCE_LEAD_SECONDS,
+            )
+            overflow = max(0.0, (positions[-1][1] if positions else 0.0) - total_duration)
+            timing.update({"max_start_lag_at_cap_seconds": round(cap_start_lag, 3),
+                           "max_end_lag_at_cap_seconds": round(cap_end_lag, 3)})
+            if task_id:
+                history_manager.update_task(task_id, {"dubbing_timing": timing})
+            target_indices = self._compression_segment_indices(
+                segments, durations, max_uniform_tempo,
+                NATURAL_MIN_SENTENCE_GAP_SECONDS, total_duration, NATURAL_MAX_UTTERANCE_LEAD_SECONDS,
+            )
+            raise DubbingCompressionRequired(
+                f"配音在 {max_uniform_tempo * requested_speed:.2f}x 总语速上限内无法同时保持字幕同步并放入视频："
+                f"最长句首延迟 {cap_start_lag:.1f} 秒，句尾延迟 {cap_end_lag:.1f} 秒，"
+                f"视频末尾超出 {overflow:.1f} 秒；语音原长 {timing['raw_speech_seconds']:.1f} 秒，"
+                f"共 {len(segments)} 段。需要精简部分译文；确认前不会修改字幕。",
+                target_indices,
+            )
+        positions, applied_start_lag, applied_end_lag = self._natural_timeline_plan(
+            segments, durations, timeline_tempo, sentence_gap, lead_seconds
+        )
+        timing.update({"applied_tempo": round(timeline_tempo, 3),
+                       "effective_tempo": round(timeline_tempo * requested_speed, 3),
+                       "max_start_lag_seconds": round(applied_start_lag, 3),
+                       "max_end_lag_seconds": round(applied_end_lag, 3)})
+        if task_id:
+            history_manager.update_task(task_id, {"dubbing_timing": timing})
         logger.info(
             "Dubbing natural timeline uses one uniform tempo %.3fx, %.3fs sentence gaps, "
             "and up to %.3fs distributed lead (groups=%s, natural_end=%.3fs, video=%.3fs)",
@@ -845,19 +874,7 @@ class DubbingService:
         )
 
         cursor = 0.0
-        has_speech = False
-        last_index = len(segments) - 1
-        for i, (seg, raw, raw_duration) in enumerate(zip(segments, prepared_paths, durations)):
-            earliest = cursor + (sentence_gap if has_speech else 0.0)
-            preferred_start = max(0.0, float(seg.start) - lead_seconds)
-            if i == last_index:
-                latest_fitting_start = total_duration - (raw_duration / timeline_tempo)
-                preferred_start = max(
-                    0.0,
-                    float(seg.start) - NATURAL_MAX_FINAL_LEAD_SECONDS,
-                    min(preferred_start, latest_fitting_start),
-                )
-            actual_start = max(preferred_start, earliest)
+        for i, (raw, (actual_start, actual_end)) in enumerate(zip(prepared_paths, positions)):
             gap = actual_start - cursor
             if gap > 0.005:
                 gap_wav = fitted_dir / f"gap_{i:06d}.wav"
@@ -867,8 +884,7 @@ class DubbingService:
             fitted_wav = fitted_dir / f"seg_{i:06d}.wav"
             self._normalize_natural_audio(raw, fitted_wav, timeline_tempo)
             entries.append(f"file '{fitted_wav.as_posix()}'")
-            cursor = actual_start + raw_duration / timeline_tempo
-            has_speech = True
+            cursor = actual_end
 
         # Keep the dub track as long as the source video. Without this silence,
         # muxing with -shortest truncates videos that have no subtitle near the end.
@@ -1099,7 +1115,8 @@ class DubbingService:
                 {"status": "dubbing", "message": "正在对齐时间轴...", "progress": 70},
             )
             dub_track = self._build_timeline(
-                dubbing_segments, raw_paths, total_duration, temp_dir, provider=provider
+                dubbing_segments, raw_paths, total_duration, temp_dir,
+                provider=provider, task_id=task_id, requested_speed=speed,
             )
 
             # Persist dub audio
@@ -1145,6 +1162,16 @@ class DubbingService:
                 task_id, {"dubbing_status": "cancelled", "dubbing_error": str(e)}
             )
             emit_event(task_id, {"status": "dubbing_cancelled", "message": str(e), "progress": 0})
+            raise
+        except DubbingCompressionRequired as exc:
+            task = history_manager.get_task(task_id) or {}
+            awaiting_pipeline_approval = task.get("pipeline_status") == "processing"
+            history_manager.update_task(
+                task_id,
+                {"dubbing_status": "awaiting_compression" if awaiting_pipeline_approval else "failed",
+                 "dubbing_error": str(exc)},
+            )
+            emit_event(task_id, {"status": "dubbing_compression_required", "message": str(exc)})
             raise
         except Exception as e:
             logger.exception(f"Dubbing failed for task {task_id}")

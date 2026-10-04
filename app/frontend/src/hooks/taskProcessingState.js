@@ -176,6 +176,10 @@ export function deriveTaskProcessingState(task, t = value => value) {
       message: standaloneMessage || localizedTaskMessage(task, t) || t('processing'),
     };
   }
+  if (task?.pipeline_status === 'awaiting_compression') {
+    return { running: false, status: 'awaiting_compression', progress,
+      currentStage: 'dub', message: t('compressionApprovalRequired') };
+  }
   if (task?.pipeline_status === 'failed' || ['failed', 'translation_failed'].includes(persistedStatus)) {
     return {
       running: false,

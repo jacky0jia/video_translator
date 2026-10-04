@@ -100,6 +100,8 @@ class DubbingApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(translated.segments[0].text, "较长的第一句")
         self.assertEqual(compressed.segments[0].text, "第一句")
         self.assertEqual(compressed.segments[1].text, "第二句")
+        service.translate_batch.assert_awaited_once()
+        self.assertEqual(service.translate_batch.await_args.args[0], [source.segments[0]])
 
     def test_shortening_cannot_discard_numbers_negation_or_causality(self):
         safe = TranslationService._safe_shorter_translation

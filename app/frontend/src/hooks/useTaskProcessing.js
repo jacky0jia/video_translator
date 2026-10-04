@@ -3,7 +3,7 @@ import { useTaskSSE } from './useTaskSSE';
 import {
   completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
   stageIdForEvent, localizedTaskMessage, STAGE_MESSAGES, STANDALONE_TRANSCRIPTION_STATUSES,
-  standaloneTranscriptionCompletion, subtitleVisibility,
+  standaloneTranscriptionCompletion, subtitleTranslationProgress, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
@@ -170,12 +170,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     return data;
   }, [burn, format, route, subtitleContent, subtitleStyle, task]);
 
-  useTaskSSE(running && route === 'dubbing' ? task?.task_id : null, event => {
-    const nextProgress = Number(event.progress_percent);
-    if (Number.isFinite(nextProgress)) setProgress(nextProgress);
-    const eventStage = event.pipeline_stage || event.status;
-    setCurrentStage(value => stageIdForEvent(event, value));
-    if (event.message) setMessage(STAGE_MESSAGES[eventStage] || localizedTaskMessage(event, t));
+  useTaskSSE(running ? task?.task_id : null, event => {
     const transcriptionCompletion = standaloneTranscriptionCompletion(event, t);
     if (transcriptionCompletion) {
       setProgress(transcriptionCompletion.progress);
@@ -186,6 +181,26 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       refresh().catch(() => {});
       return;
     }
+    if (STANDALONE_TRANSCRIPTION_STATUSES.has(event.status)
+      && event.pipeline_status !== 'processing') {
+      const nextProgress = Number(event.progress_percent);
+      if (Number.isFinite(nextProgress)) setProgress(nextProgress);
+      setCurrentStage('transcribe');
+      setMessage(localizedTaskMessage(event, t));
+      return;
+    }
+    if (route === 'subtitles') {
+      if (event.status !== 'translating') return;
+      setProgress(value => subtitleTranslationProgress(event.progress_percent, value));
+      setCurrentStage('translate');
+      setMessage(localizedTaskMessage(event, t));
+      return;
+    }
+    const nextProgress = Number(event.progress_percent);
+    if (Number.isFinite(nextProgress)) setProgress(nextProgress);
+    const eventStage = event.pipeline_stage || event.status;
+    setCurrentStage(value => stageIdForEvent(event, value));
+    if (event.message) setMessage(STAGE_MESSAGES[eventStage] ? t(STAGE_MESSAGES[eventStage]) : localizedTaskMessage(event, t));
     // Translation artifacts are ready before synthesis starts, even if dubbing
     // later fails. Refresh here as well as on terminal events.
     if (route === 'dubbing' && ['pipeline_translated', 'pipeline_dubbing'].includes(event.status)) {
@@ -212,7 +227,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     if (event.pipeline_status === 'cancelled' || event.status === 'cancelled') {
       setRunning(false);
       setStatus('cancelled');
-      setMessage('Processing cancelled');
+      setMessage(t('pipelineCancelled'));
       refresh().catch(() => {});
     }
   });
@@ -220,8 +235,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const ensureTranslation = async (force = false) => {
     if (!force && task.translations?.[targetLang]) return;
     setCurrentStage('translate');
-    setProgress(value => Math.max(value, 30));
-    setMessage(`Translating into ${targetLang}`);
+    setProgress(value => Math.max(value, 40));
+    setMessage(t('translating'));
     const body = new URLSearchParams();
     body.append('json_path', task.transcription_path);
     body.append('target_lang', targetLang);
@@ -249,12 +264,12 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     await ensureTranslation(forceTranslate);
     await refresh();
     setProgress(burn ? 70 : 85);
-    setMessage('Creating subtitle file');
+    setMessage(t('creatingSubtitleFile'));
     await createSubtitleFile();
     if (burn) {
       setCurrentStage('render');
       setProgress(85);
-      setMessage('Burning subtitles into video');
+      setMessage(t('burningSubtitlesIntoVideo'));
       const visibility = subtitleVisibility(subtitleContent, showSource, showTarget);
       const response = await fetch('/api/burn', {
         method: 'POST',
@@ -293,7 +308,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || 'Unable to start dubbing');
-    setMessage('Complete workflow started');
+    setMessage(t('pipelineStarted'));
   };
 
   const run = async ({ forceTranslate = false, forceDub = false, resume = false } = {}) => {
@@ -301,8 +316,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     completionHandledRef.current = false;
     setRunning(true);
     setStatus('processing');
-    setProgress(forceTranslate ? 30 : (forceDub || resume) ? 60 : 30);
-    setCurrentStage(forceTranslate ? 'translate' : forceDub ? 'dub' : resume && route === 'dubbing' ? 'dub' : resume && burn ? 'render' : 'translate');
+    const hasTranslation = Boolean(task.translations?.[targetLang] || (task.target_lang === targetLang && task.translation_path));
+    const firstStage = forceTranslate || !hasTranslation ? 'translate' : route === 'dubbing' || forceDub ? 'dub' : burn ? 'render' : 'translate';
+    setProgress(firstStage === 'translate' ? 40 : firstStage === 'dub' ? 70 : 85);
+    setCurrentStage(firstStage);
     try {
       if (route === 'dubbing') {
         await startDubbing({ forceTranslate, forceDub });
@@ -315,7 +332,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       setMessage(t('allOutputsReady'));
       setRunning(false);
       await refresh();
-      showToast('Processing completed', 'success');
+      showToast(t('allOutputsReady'), 'success');
     } catch (error) {
       setRunning(false);
       setStatus('failed');
@@ -334,7 +351,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const cancel = async () => {
     if (route !== 'dubbing') return;
     const response = await fetch(`/api/pipeline/${task.task_id}/cancel`, { method: 'POST' });
-    if (!response.ok) showToast('Unable to cancel processing', 'error');
+    if (!response.ok) showToast(t('pipelineCancelFailed'), 'error');
   };
 
   return {

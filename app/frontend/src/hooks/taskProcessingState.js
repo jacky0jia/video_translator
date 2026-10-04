@@ -24,6 +24,12 @@ export function stageIdForEvent(event, currentStage = '') {
     || currentStage;
 }
 
+export function subtitleTranslationProgress(percent, previous = 40) {
+  const numeric = Number(percent);
+  if (!Number.isFinite(numeric)) return previous;
+  return Math.max(previous, 40 + Math.round(Math.max(0, Math.min(95, numeric) - 5) / 90 * 30));
+}
+
 export function completedStageIds(task, targetLang) {
   const completed = [];
   if (task?.transcription_path) completed.push('transcribe');
@@ -41,11 +47,14 @@ export function completedStageIds(task, targetLang) {
 }
 
 export const STAGE_MESSAGES = {
-  pipeline_transcribing: 'Transcribing',
-  pipeline_translating: 'Translating',
-  pipeline_translated: 'Translation complete',
-  pipeline_dubbing: 'Creating dubbing',
-  burning: 'Rendering subtitles',
+  pipeline_transcribing: 'pipeline_transcribing',
+  pipeline_translating: 'pipeline_translating',
+  pipeline_translated: 'pipeline_translated',
+  pipeline_dubbing: 'pipeline_dubbing',
+  pipeline_rendering: 'pipeline_rendering',
+  burning: 'burning',
+  burning_completed: 'burnComplete',
+  dubbing_completed: 'dubbingCompleted',
 };
 
 function formatMessage(template, values) {
@@ -58,6 +67,20 @@ function formatMessage(template, values) {
 export function localizedTaskMessage(task, t = value => value) {
   const status = String(task?.status || '');
   const rawMessage = String(task?.message || '');
+  const pipelineKey = STAGE_MESSAGES[task?.pipeline_stage] || STAGE_MESSAGES[status];
+  if (status === 'dubbing') {
+    const speech = rawMessage.match(/正在合成语音\s*(\d+)\s*\/\s*(\d+)/);
+    if (speech) return formatMessage(t('synthesizingSpeechChunk'), { current: speech[1], total: speech[2] });
+    if (/正在准备配音/.test(rawMessage)) return t('preparingDubbing');
+    if (/正在对齐时间轴/.test(rawMessage)) return t('aligningDubbing');
+    if (/正在合并音视频/.test(rawMessage)) return t('muxingDubbedVideo');
+  }
+  if (status === 'translating') {
+    const batch = rawMessage.match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (batch) return formatMessage(t('translatingBatch'), { current: batch[1], total: batch[2] });
+    return t('translating');
+  }
+  if (pipelineKey && status !== 'transcribing' && status !== 'extracting_audio') return t(pipelineKey);
   if (status === 'extracting_audio') return t('extractingAudio');
   if (status !== 'transcribing') return rawMessage;
 
@@ -71,6 +94,9 @@ export function localizedTaskMessage(task, t = value => value) {
   }
   if (/正在运行语音识别|running speech recognition/i.test(rawMessage)) {
     return t('runningSpeechRecognition');
+  }
+  if (/识别完成.*整理结果|finishing (?:the )?transcription/i.test(rawMessage)) {
+    return t('finishingTranscription');
   }
   if (/转录完成.*保存结果|saving (?:the )?transcription/i.test(rawMessage)) {
     return t('savingTranscription');
@@ -147,7 +173,7 @@ export function deriveTaskProcessingState(task, t = value => value) {
       status: 'processing',
       progress,
       currentStage,
-      message: standaloneMessage || STAGE_MESSAGES[persistedStage] || localizedTaskMessage(task, t) || t('processing'),
+      message: standaloneMessage || localizedTaskMessage(task, t) || t('processing'),
     };
   }
   if (task?.pipeline_status === 'failed' || ['failed', 'translation_failed'].includes(persistedStatus)) {

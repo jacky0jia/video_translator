@@ -21,10 +21,10 @@ export default function SubtitleStyleControls({
         <button data-style-control type="button" onClick={() => update({ fontSize: fontSize + 2 })} title={t('increaseFontSize')} className="app-style-control h-8 px-2 flex items-center justify-center text-slate-700 dark:text-slate-200 text-xs font-bold transition">A+</button>
         <button data-style-control type="button" onClick={() => update({ fontSize: Math.max(10, fontSize - 2) })} title={t('decreaseFontSize')} className="app-style-control h-8 px-2 flex items-center justify-center text-slate-700 dark:text-slate-200 text-xs font-bold transition">A-</button>
         <label data-style-control className="app-style-control h-8 w-8 flex items-center justify-center cursor-pointer overflow-hidden" title={t('sourceColor')}>
-          <input type="color" value={sourceColor} onChange={event => update({ sourceColor: event.target.value })} className="h-10 w-10 p-0 border-0 cursor-pointer bg-transparent scale-125" />
+          <input type="color" value={sourceColor} onChange={event => update({ sourceColor: event.target.value })} className="app-color-swatch cursor-pointer" />
         </label>
         <label data-style-control className="app-style-control h-8 w-8 flex items-center justify-center cursor-pointer overflow-hidden" title={t('targetColor')}>
-          <input type="color" value={targetColor} onChange={event => update({ targetColor: event.target.value })} className="h-10 w-10 p-0 border-0 cursor-pointer bg-transparent scale-125" />
+          <input type="color" value={targetColor} onChange={event => update({ targetColor: event.target.value })} className="app-color-swatch cursor-pointer" />
         </label>
         <button data-style-control type="button" onClick={() => update({ bold: !bold })} title={t('bold') || 'Bold'} className={`app-style-control h-8 w-8 flex items-center justify-center text-xs font-bold transition ${bold ? 'app-style-control-active' : 'text-slate-700 dark:text-slate-200'}`}>B</button>
         <label data-style-control className="app-style-control flex h-8 items-center gap-2 px-2 text-xs text-slate-600 dark:text-slate-300">

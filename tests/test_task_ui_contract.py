@@ -29,7 +29,7 @@ const active = deriveTaskProcessingState({
 }, t);
 assert.deepEqual(active, {
   running: true, status: 'processing', progress: 75,
-  currentStage: 'dub', message: 'Creating dubbing',
+  currentStage: 'dub', message: 'pipeline_dubbing',
 });
 
 const activeWithoutProgress = deriveTaskProcessingState({
@@ -189,7 +189,8 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertNotIn('<option value="Korean">', upload)
         self.assertIn("setTtsMode(data.tts_mode", processing)
         self.assertIn("standaloneTranscriptionCompletion({ status: task?.status }, t)", processing)
-        self.assertIn("running && route === 'dubbing' ? task?.task_id : null", processing)
+        self.assertIn("running ? task?.task_id : null", processing)
+        self.assertIn("subtitleTranslationProgress(event.progress_percent, value)", processing)
         self.assertIn("cache: 'no-store'", processing)
         self.assertIn("controller?.abort()", processing)
         self.assertIn("currentRequestId !== requestId", processing)

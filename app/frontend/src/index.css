@@ -68,6 +68,10 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
 .app-style-control:hover { border-color: #9ba9bc; background: #eef2f7; }
 .app-style-control-active { border-color: #3b82f6; color: #fff; background: #3b82f6; }
 .app-style-control-active:hover { border-color: #2563eb; background: #2563eb; }
+.app-color-swatch { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; appearance: none; }
+.app-color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+.app-color-swatch::-webkit-color-swatch { border: 0; border-radius: 4px; }
+.app-color-swatch::-moz-color-swatch { border: 0; border-radius: 4px; }
 .dark .app-style-control { border-color: #475569; background: #334155; }
 .dark .app-style-control:hover { border-color: #64748b; background: #475569; }
 .dark .app-style-control-active, .dark .app-style-control-active:hover { border-color: #3b82f6; background: #3b82f6; }

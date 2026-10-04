@@ -71,7 +71,7 @@ async def run_transcription_task(
 
                 # Deduplicate overlap regions
                 all_segments = deduplicate_segments(all_segments)
-                emit_event(task_id, {"status": "transcribing", "message": "转录完成，正在保存结果...", "progress_percent": 100})
+                emit_event(task_id, {"status": "transcribing", "message": "转录完成，正在保存结果...", "progress_percent": 99})
 
                 transcription_result = TranscriptionResult(
                     video_source=str(audio_path),
@@ -84,7 +84,7 @@ async def run_transcription_task(
                 transcription_result = await asr_service.transcribe(
                     audio_path=audio_path, language=language
                 )
-                emit_event(task_id, {"status": "transcribing", "message": "转录完成，正在保存结果...", "progress_percent": 100})
+                emit_event(task_id, {"status": "transcribing", "message": "转录完成，正在保存结果...", "progress_percent": 99})
 
         # 3. Save as intermediate JSON
         output_filename = f"{Path(filename).stem}_transcription_{task_id}"
@@ -94,7 +94,7 @@ async def run_transcription_task(
         history_manager.update_task(
             task_id, {"status": "transcribed", "transcription_path": str(output_path), "language": transcription_result.language}
         )
-        emit_event(task_id, {"status": "transcribed", "message": "转录完成！", "transcription_path": str(output_path), "language": transcription_result.language})
+        emit_event(task_id, {"status": "transcribed", "message": "转录完成！", "progress_percent": 100, "transcription_path": str(output_path), "language": transcription_result.language})
 
     except Exception as e:
         error_msg = str(e)

@@ -218,8 +218,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   });
 
   const ensureTranslation = async (force = false) => {
-    const profile = task.translation_profiles?.[targetLang];
-    if (!force && task.translations?.[targetLang] && profile !== 'dubbing') return;
+    if (!force && task.translations?.[targetLang]) return;
     setCurrentStage('translate');
     setProgress(value => Math.max(value, 30));
     setMessage(`Translating into ${targetLang}`);

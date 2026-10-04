@@ -8,8 +8,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# In-memory event queues per task_id
-_task_queues: Dict[str, asyncio.Queue] = {}
+# Each SSE connection needs its own queue; a shared queue distributes events
+# between listeners instead of broadcasting them.
+_task_queues: Dict[str, Dict[asyncio.Queue, asyncio.AbstractEventLoop]] = {}
 
 
 def _browser_event(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -35,10 +36,19 @@ def _browser_event(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_queue(task_id: str) -> asyncio.Queue:
-    """Get or create an asyncio Queue for a given task."""
-    if task_id not in _task_queues:
-        _task_queues[task_id] = asyncio.Queue(maxsize=settings.SSE_QUEUE_MAXSIZE)
-    return _task_queues[task_id]
+    """Register an independent queue for one SSE connection."""
+    queue = asyncio.Queue(maxsize=settings.SSE_QUEUE_MAXSIZE)
+    _task_queues.setdefault(task_id, {})[queue] = asyncio.get_running_loop()
+    return queue
+
+
+def _deliver(queue: asyncio.Queue, task_id: str, data: Dict[str, Any]) -> None:
+    try:
+        queue.put_nowait(data)
+    except asyncio.QueueFull:
+        logger.warning("SSE queue full for task %s; replacing stale event", task_id)
+        queue.get_nowait()
+        queue.put_nowait(data)
 
 
 def emit_event(task_id: str, data: Dict[str, Any]) -> None:
@@ -46,14 +56,18 @@ def emit_event(task_id: str, data: Dict[str, Any]) -> None:
     # Task state is persisted separately. Do not create an orphan queue when
     # nobody is listening: long dubbing jobs can emit hundreds of events and
     # would otherwise fill a queue that can never be drained.
-    queue = _task_queues.get(task_id)
-    if queue is None:
-        return
     try:
-        queue.put_nowait(data)
-        logger.debug(f"Emitted event for task {task_id}: {data}")
-    except asyncio.QueueFull:
-        logger.warning(f"SSE queue full for task {task_id}, dropping event: {data}")
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    for queue, loop in tuple(_task_queues.get(task_id, {}).items()):
+        try:
+            if loop is current_loop:
+                _deliver(queue, task_id, data)
+            else:
+                loop.call_soon_threadsafe(_deliver, queue, task_id, data)
+        except RuntimeError:
+            logger.debug("SSE listener loop already closed for task %s", task_id)
 
 
 async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] = None):
@@ -90,6 +104,9 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
         logger.error(f"SSE generator error for task {task_id}: {e}")
     finally:
         # Optional: clean up queue if task is done
-        if task_id in _task_queues:
-            del _task_queues[task_id]
+        subscribers = _task_queues.get(task_id)
+        if subscribers is not None:
+            subscribers.pop(queue, None)
+            if not subscribers:
+                _task_queues.pop(task_id, None)
         logger.info(f"SSE connection closed for task {task_id}")

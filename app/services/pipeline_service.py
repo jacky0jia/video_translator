@@ -167,12 +167,10 @@ class PipelineService:
 
             task = history_manager.get_task(task_id) or {}
             translation_path = (task.get("translations") or {}).get(target_lang)
-            translation_profile = (task.get("translation_profiles") or {}).get(target_lang)
             if (
                 force_translate
                 or not translation_path
                 or not Path(translation_path).exists()
-                or translation_profile != "dubbing"
             ):
                 self._set_stage(task_id, "pipeline_translating", "正在翻译...", 40)
                 stage = self._translate_stage or self._default_translate

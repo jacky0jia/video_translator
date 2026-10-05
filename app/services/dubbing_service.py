@@ -48,6 +48,7 @@ from app.services.tts.registry import (
     resolve_tts_route,
 )
 from app.services.tts.speaches import SpeachesTTSProvider
+from app.services.tts.speech_cache import SpeechCache, synthesis_context, synthesis_signature
 
 logger = logging.getLogger(__name__)
 
@@ -317,7 +318,7 @@ class DubbingService:
         provider: str | None = None,
         language: str = "",
     ) -> List[Path]:
-        """Synthesize all segments sequentially, return list of raw WAV paths.
+        """Reuse unchanged raw speech and synthesize changed utterances sequentially.
 
         If a voice fails after retries (e.g. server crash on a specific voice),
         automatically falls back to other voices of the same language. Once a
@@ -326,8 +327,9 @@ class DubbingService:
         raw_paths: List[Path] = []
         total = len(segments)
 
-        # Pre-fetch same-language fallback voices for resilience
         provider = provider or ("kokoro" if _is_kokoro_mode() else settings.TTS_MODE)
+        cache = SpeechCache(settings.TEMP_DIR / task_id / "speech-cache",
+                            synthesis_context(provider), speed=speed, language=language)
         # In local mode no HTTP client is needed — kokoro-onnx runs in-process.
         # In speaches mode reuse a single client across all segments (connection pool).
         client = (
@@ -339,23 +341,12 @@ class DubbingService:
         if provider == "speaches" and client is not None:
             adapter.bind_client(client)
         effective_voice = voice
+        stage_lifecycle = self._gpu_lifecycle if provider == "qwen" else self._lifecycle
+        started = False
+        reused = 0
+        synthesized = 0
+        fallback_voices = []
         try:
-            stage_lifecycle = self._gpu_lifecycle if provider == "qwen" else self._lifecycle
-            await stage_lifecycle.startup(
-                task_id=task_id, stage="tts", provider=provider
-            )
-            fallback_voices = (
-                []
-                if provider == "edge"
-                else await self._fetch_voice_fallbacks(voice, adapter)
-            )
-            if fallback_voices:
-                logger.info(
-                    "Loaded %s fallback voices for '%s': %s",
-                    len(fallback_voices),
-                    voice,
-                    fallback_voices,
-                )
             for i, seg in enumerate(segments):
                 self._check_cancelled(task_id)
                 text = (seg.text or "").strip()
@@ -366,27 +357,43 @@ class DubbingService:
                     raw_paths.append(placeholder)
                     continue
 
-                # Try current voice first, then fallbacks
+                wav_bytes = cache.get(text, effective_voice)
+                if wav_bytes is None and not started:
+                    started = True
+                    await stage_lifecycle.startup(task_id=task_id, stage="tts", provider=provider)
+                    if provider != "edge":
+                        fallback_voices = await self._fetch_voice_fallbacks(voice, adapter)
+                # Cache entries are keyed by the actual voice, including fallbacks.
                 voices_to_try = [effective_voice] + [
                     v for v in fallback_voices if v != effective_voice
                 ]
-                wav_bytes: Optional[bytes] = None
                 last_err: Optional[Exception] = None
-                for try_voice in voices_to_try:
+                was_cached = wav_bytes is not None
+                for try_voice in ([] if was_cached else voices_to_try):
                     try:
-                        wav_bytes = await self._synthesize_one(
-                            client,
-                            text,
-                            try_voice,
-                            speed,
-                            provider,
-                            adapter=adapter,
-                            should_cancel=lambda: bool(
-                                self._cancel_events.get(task_id)
-                                and self._cancel_events[task_id].is_set()
-                            ),
-                            language=language,
-                        )
+                        wav_bytes = cache.get(text, try_voice)
+                        was_cached = wav_bytes is not None
+                        if wav_bytes is None:
+                            wav_bytes = await self._synthesize_one(
+                                client,
+                                text,
+                                try_voice,
+                                speed,
+                                provider,
+                                adapter=adapter,
+                                should_cancel=lambda: bool(
+                                    self._cancel_events.get(task_id)
+                                    and self._cancel_events[task_id].is_set()
+                                ),
+                                language=language,
+                            )
+                            self._check_cancelled(task_id)
+                            # A first local run may download model assets. Store
+                            # against their final identity, not the missing files.
+                            if synthesized == 0:
+                                cache = SpeechCache(settings.TEMP_DIR / task_id / "speech-cache",
+                                                    synthesis_context(provider), speed=speed, language=language)
+                            cache.put(text, try_voice, wav_bytes)
                         if try_voice != effective_voice:
                             logger.warning(
                                 f"Segment {i + 1}/{total}: switched to fallback voice "
@@ -396,6 +403,8 @@ class DubbingService:
                         break
                     except TTSCancelled as exc:
                         raise DubbingCancelled(str(exc)) from exc
+                    except DubbingCancelled:
+                        raise
                     except RuntimeError as e:
                         last_err = e
                         logger.warning(
@@ -412,6 +421,8 @@ class DubbingService:
                 with open(raw_path, "wb") as f:
                     f.write(wav_bytes)
                 raw_paths.append(raw_path)
+                reused += int(was_cached)
+                synthesized += int(not was_cached)
                 progress = 5 + int((i + 1) / total * 65)
                 emit_event(
                     task_id,
@@ -419,6 +430,8 @@ class DubbingService:
                         "status": "dubbing",
                         "message": f"正在合成语音 {i + 1}/{total}...",
                         "progress": progress,
+                        "speech_reused": reused,
+                        "speech_synthesized": synthesized,
                     },
                 )
         finally:
@@ -431,9 +444,14 @@ class DubbingService:
                     if client is not None:
                         await client.aclose()
                 finally:
-                    await stage_lifecycle.shutdown(
-                        task_id=task_id, stage="tts", provider=provider
-                    )
+                    if started:
+                        await stage_lifecycle.shutdown(
+                            task_id=task_id, stage="tts", provider=provider
+                        )
+            history_manager.update_task(task_id, {"dubbing_provider_signature": synthesis_signature(provider), "dubbing_synthesis": {
+                "reused": reused, "synthesized": synthesized, "utterances": total,
+            }})
+            logger.info("Dubbing task %s: reused %s utterances, synthesized %s", task_id, reused, synthesized)
         return raw_paths
 
     # ------------------------------------------------------------------

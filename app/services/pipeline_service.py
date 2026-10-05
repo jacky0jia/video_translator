@@ -65,6 +65,14 @@ class PipelineService:
     def _can_reuse_dubbing(
         cls, task: dict, target_lang: str, voice: str, speed: float
     ) -> bool:
+        # Completed tracks made with the cache must also match the current
+        # engine/model/assets. Legacy outputs retain their existing behavior.
+        if task.get("dubbing_provider_signature"):
+            from app.services.tts.registry import resolve_tts_route
+            from app.services.tts.speech_cache import synthesis_signature
+            provider = resolve_tts_route(settings.TTS_MODE, target_lang).provider_id
+            if task["dubbing_provider_signature"] != synthesis_signature(provider):
+                return False
         return (
             task.get("dubbing_status") == "completed"
             and task.get("dubbing_target_lang") == target_lang

@@ -256,7 +256,7 @@ export const translations = {
     qwenAutoCpuFallback: 'Automatically retry on CPU after GPU backend failure',
     qwenAutoCpuFallbackHint: 'Applies to the next dubbing task. CPU may be slower. Cancellation and timeouts do not retry.',
     qwenRuntimeStatus: 'Latest synthesis device / state',
-    qwenFixedSpeed: 'Qwen synthesizes at 1.00x; the finished speech can be uniformly sped up to 1.60x for sync.',
+    qwenFixedSpeed: 'Qwen generates speech at 1.00x speed. For subtitle synchronization, the entire audio track can be sped up to a maximum of 1.60x.',
     voiceCatalogUnavailable: 'The voice catalog could not be loaded. Check the selected TTS runtime in Settings.',
     qwenCpuFallbackWarning: 'GPU backend failed; switched to CPU. Synthesis may be slower. Reason',
     qwenCpuFallbackPending: 'GPU backend failed; preparing to retry on CPU. Reason',

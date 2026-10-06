@@ -25,6 +25,7 @@ from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.history import history_manager
 from app.core.events import emit_event
 from app.services.hardware_service import hardware_service
+from app.services.media_duration import probe_media_duration
 from app.core.schemas import TranscriptionResult
 from app.services.edge_tts_service import EdgeTTSService
 from app.services.tts.edge import EdgeTTSProvider
@@ -482,16 +483,7 @@ class DubbingService:
         self._run_ffmpeg(cmd, "write_silence")
 
     def _probe_duration(self, audio_path: Path) -> float:
-        """Probe audio duration in seconds via ffmpeg stderr."""
-        cmd = [self.ffmpeg_path, "-i", str(audio_path), "-f", "null", "-"]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
-        )
-        # ffmpeg prints Duration: HH:MM:SS.xx to stderr
-        m = re.search(r"Duration:\s+(\d+:\d+:\d+\.\d+)", result.stderr or "")
-        if not m:
-            return 0.0
-        return self._parse_time(m.group(1))
+        return probe_media_duration(audio_path, self.ffmpeg_path)
 
     def _fit_segment_audio(
         self,

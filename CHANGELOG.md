@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-alpha.5 - 2026-10-06
+
+- Exclude Conda installation metadata/history and pip direct-install provenance from the portable Python runtime; these are not needed to run the application and can contain developer-local paths.
+- Gate public builds and independent bundle verification on personal-path and installation/session metadata checks, without removing third-party attribution or exposing matching private values in logs.
+- Privacy packaging correction only; translation, dubbing and hardware support are unchanged from alpha.4.
+
 ## 0.1.0-alpha.4 - 2026-10-06
 
 - Preserve edited translations when starting dubbing and reliably refresh task completion and stage progress.

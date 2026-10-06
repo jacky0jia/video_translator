@@ -21,11 +21,12 @@ if PACKAGING_DIR not in sys.path:
 from portable_licenses import build_license_bundle
 from upstream_policy import assert_upstream_assets_absent
 from runtime_security import runtime_security_blockers
+from portable_privacy import assert_portable_privacy
 
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_EXCLUDED_PARTS = {"__pycache__", "frontend", "output", "temp", "uploads"}
-RUNTIME_EXCLUDED_PARTS = {"__pycache__", ".pytest_cache"}
+RUNTIME_EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", "conda-meta", "direct_url.json"}
 RUNTIME_EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 QWEN_INSTALL_SUPPORT_FILES = (
     "runtime-manifest.b10792.json",
@@ -318,6 +319,9 @@ def build_portable(*, output_dir: Path, source_root: Path = ROOT, python_runtime
         (staging / "README.md").write_text(readme, encoding="utf-8")
         inventory = _python_inventory(staging / "runtime")
         if public_distribution:
+            assert_portable_privacy(staging, private_roots=(
+                paths['source_root'], paths['python_runtime'], Path.home(),
+            ))
             blockers = runtime_security_blockers(inventory, staging / 'runtime')
             if blockers:
                 raise RuntimeError('Runtime security checks failed: ' + '; '.join(blockers))

@@ -12,6 +12,7 @@ import subprocess
 import time
 import urllib.request
 from upstream_policy import assert_upstream_assets_absent
+from portable_privacy import assert_portable_privacy
 
 
 def sha256(path: Path) -> str:
@@ -34,6 +35,7 @@ def verify_manifest(bundle: Path) -> dict:
     ):
         raise RuntimeError("Public portable bundle has unresolved distribution blockers")
     if scope == "public_release":
+        assert_portable_privacy(bundle)
         if manifest.get('dependency_delivery') == 'user_upstream_install':
             assert_upstream_assets_absent(bundle)
             if not (bundle / 'upstream-dependencies.json').is_file():

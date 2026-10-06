@@ -48,6 +48,14 @@ Review the generated manifest before publishing.
 
 ### Security checks for new public builds
 
+Public builds and `portable_verify.py` must pass the personal-path/installation
+metadata gate. Never ship `conda-meta` or pip `direct_url.json` from the build
+environment, cookies or task history. Scan the final ZIP as well as its staged
+directory; preserve public upstream license/author notices and documented sample
+paths. This focused gate is not a comprehensive secret scanner. When correcting
+an already published privacy issue, withdraw confirmed affected downloads only
+after the corrected package is verified and published; retain source tags/history.
+
 Run both production and full frontend dependency audits, plus a current PyPI
 advisory scan of the actual `python-packages.json`. As of 2026-09-18, public builds
 reject installed pip below 26.2.0 and wheel below 0.46.2; pip wheels under

@@ -32,7 +32,7 @@ class PublicQwenDocumentationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         for filename in ("README.md", "README.zh-CN.md"):
             document = (root / filename).read_text(encoding="utf-8")
-            self.assertIn("releases/tag/v0.1.0-alpha.3", document)
+            self.assertIn("releases/tag/v0.1.0-alpha.4", document)
             self.assertIn("start-portable.bat", document)
             self.assertIn("install-upstream.bat", document)
             mode_line = next(line for line in document.splitlines() if "`TTS_MODE`" in line)
@@ -81,10 +81,10 @@ class PublicQwenDocumentationTests(unittest.TestCase):
         frontend = root / "app/frontend"
         manifest = json.loads((frontend / "package.json").read_text(encoding="utf-8"))
         lock = json.loads((frontend / "package-lock.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.1.0-alpha.3")
+        self.assertEqual(manifest["version"], "0.1.0-alpha.4")
         self.assertEqual(lock["version"], manifest["version"])
         self.assertEqual(lock["packages"][""]["version"], manifest["version"])
-        self.assertIn("## " + manifest["version"] + " - 2026-09-19", (root / "CHANGELOG.md").read_text(encoding="utf-8"))
+        self.assertIn("## " + manifest["version"] + " - 2026-10-06", (root / "CHANGELOG.md").read_text(encoding="utf-8"))
 
     def test_notices_record_model_and_voice_asset_redistribution_metadata(self):
         root = Path(__file__).resolve().parents[1]

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.4 - 2026-10-06
+
+- Preserve edited translations when starting dubbing and reliably refresh task completion and stage progress.
+- Add subtitle alignment/overlap review warnings, editable timing, and source-scaled subtitle positioning for more consistent previews and rendered output.
+- Use concise, faithful initial translations; require explicit approval before shortening measured overlong dubbing text, with matching subtitles and speech.
+- Reuse verified unchanged utterance audio after translation edits or approved compression, while rebuilding the complete timeline and video.
+- Inspect media duration through WAV headers or container metadata instead of decoding entire videos before dubbing.
+- Add a default-on, optional visual AI credit/GitHub end note without narration.
+- Refresh responsive settings/workflow UI, localized progress messages, and stage/detail progress hierarchy.
+- Improve local browser authorization while retaining the local-only security boundary.
+
 ## 0.1.0-alpha.3 - 2026-09-19
 
 - Preview exported subtitle text, dubbing audio and generated video from the task's Export panel, with bounded subtitle reads and clear missing-file feedback.

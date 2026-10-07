@@ -20,6 +20,16 @@ from app.core.file_security import contained_file
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_TASK_EVENT_FIELDS = (
+    "status", "message", "progress_percent", "pipeline_status", "pipeline_stage",
+    "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
+)
+
+
+def _task_event_snapshot(task: dict) -> dict:
+    """Return the persisted state needed to resume a live progress stream."""
+    return {key: task.get(key) for key in _TASK_EVENT_FIELDS}
+
 
 def _to_url_path(file_path: Optional[str]) -> Optional[str]:
     """Convert an absolute output file path to a URL-friendly static path."""
@@ -169,11 +179,7 @@ async def task_events(task_id: str):
         )
 
     return StreamingResponse(
-        event_generator(task_id, initial_data={
-            "status": task.get("status", "unknown"),
-            "message": task.get("message", ""),
-            "progress_percent": task.get("progress_percent"),
-        }),
+        event_generator(task_id, initial_data=_task_event_snapshot(task)),
         media_type="text/event-stream",
     )
 

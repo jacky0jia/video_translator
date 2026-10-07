@@ -52,6 +52,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [status, setStatus] = useState('ready');
   const [lastFailedStage, setLastFailedStage] = useState('');
   const completionHandledRef = useRef(false);
+  const startRequestRef = useRef(false);
 
   const targetLang = task?.target_lang || 'Chinese';
   const requiredStages = useMemo(() => route === 'dubbing'
@@ -166,6 +167,19 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, [task?.pipeline_status, task?.compression_request, t]);
 
   useEffect(() => {
+    const persistedRunning = task?.pipeline_status === 'processing'
+      || task?.dubbing_status === 'processing'
+      || task?.burn_status === 'processing';
+    if (!persistedRunning || running || ['completed', 'failed', 'cancelled', 'awaiting_compression'].includes(status)) return;
+    const restored = deriveTaskProcessingState(task, t);
+    setProgress(restored.progress);
+    setCurrentStage(restored.currentStage);
+    setMessage(restored.message);
+    setStatus(restored.status);
+    setRunning(true);
+  }, [task?.status, task?.progress_percent, task?.message, task?.gpu_stage, task?.pipeline_stage, task?.pipeline_status, task?.dubbing_status, task?.burn_status, running, status, t]);
+
+  useEffect(() => {
     if (!STANDALONE_TRANSCRIPTION_STATUSES.has(task?.status)) return;
     if (task?.pipeline_status === 'processing' || task?.dubbing_status === 'processing' || task?.burn_status === 'processing') return;
     const live = deriveTaskProcessingState(task, t);
@@ -178,7 +192,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
 
   useEffect(() => {
     const completion = standaloneTranscriptionCompletion({ status: task?.status }, t);
-    if (!completion) return;
+    if (!completion || task?.pipeline_status === 'processing') return;
     setProgress(completion.progress);
     setStatus(completion.status);
     setCurrentStage(completion.currentStage);
@@ -217,7 +231,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
 
   useTaskSSE(running ? task?.task_id : null, event => {
     const transcriptionCompletion = standaloneTranscriptionCompletion(event, t);
+    // The video-plan preflight subscribes while this task is still persisted as
+    // transcribed. Its initial SSE snapshot is not a new transcription finish.
     if (transcriptionCompletion) {
+      if (task?.transcription_path || event.pipeline_status === 'processing') return;
       setProgress(transcriptionCompletion.progress);
       setStatus(transcriptionCompletion.status);
       setCurrentStage(transcriptionCompletion.currentStage);
@@ -360,12 +377,17 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || 'Unable to start dubbing');
+    if (!response.ok) {
+      const error = new Error(data.detail || 'Unable to start dubbing');
+      error.httpStatus = response.status;
+      throw error;
+    }
     setMessage(t('pipelineStarted'));
   };
 
   const run = async ({ forceTranslate = false, forceDub = false, resume = false } = {}) => {
-    if (running || !task?.transcription_path) return;
+    if (startRequestRef.current || running || !task?.transcription_path) return;
+    startRequestRef.current = true;
     completionHandledRef.current = false;
     setRunning(true);
     setStatus('processing');
@@ -397,11 +419,20 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       await refresh();
       showToast(t('allOutputsReady'), 'success');
     } catch (error) {
+      if (route === 'dubbing' && error.httpStatus === 409 && /pipeline already running/i.test(error.message)) {
+        setRunning(true);
+        setStatus('processing');
+        setMessage(t('processing'));
+        refresh().catch(() => {});
+        return;
+      }
       setRunning(false);
       setStatus('failed');
       setLastFailedStage(currentStage || 'translate');
       setMessage(error.message);
       showToast(error.message, 'error');
+    } finally {
+      startRequestRef.current = false;
     }
   };
 

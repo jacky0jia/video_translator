@@ -143,6 +143,15 @@ Video Translator 默认连接 `http://127.0.0.1:1234/v1`。应用可以通过 `l
 .\start.bat
 ```
 
+启动脚本会使用当前环境的 `python` 完成依赖检查并启动 Uvicorn。如果不想先激活环境，也可以显式指定正确的解释器：
+
+```powershell
+$env:APP_PYTHON = "C:\path\to\your\env\python.exe"
+.\start.bat
+```
+
+如果启动脚本提示缺少软件包，请先在同一个 Python 环境中安装 `requirements.txt`，再重新运行。
+
 浏览器访问 <http://127.0.0.1:8769/>。
 
 如需使用其他端口：

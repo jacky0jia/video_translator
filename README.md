@@ -150,6 +150,15 @@ Activate the Conda environment, then run:
 .\start.bat
 ```
 
+The launcher uses the active environment's `python` for both dependency checks and Uvicorn. If you do not want to activate the environment first, point it at the correct interpreter explicitly:
+
+```powershell
+$env:APP_PYTHON = "C:\path\to\your\env\python.exe"
+.\start.bat
+```
+
+If the launcher reports missing packages, install `requirements.txt` into that same Python environment before retrying.
+
 Open <http://127.0.0.1:8769/> in a browser.
 
 To use another port:

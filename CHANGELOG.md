@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Preserve the source video codec when burning subtitles or the end note (AV1, HEVC, H.264, VP9 and MPEG-4), rather than unconditionally converting to high-bitrate H.264.
+- Use source video bitrate, MKV stream bitrate tags, or an explicitly marked container-average estimate as a VBR size target. Retain original frame timing and resolution; re-encoding is not lossless and final size may vary.
+- Verify hardware encoder usability before rendering; retry hardware failures only with same-codec software. Show localized CPU-rendering progress and clearly report missing encoders instead of silently switching codecs.
+
 ## 0.1.0-alpha.5 - 2026-10-06
 
 - Exclude Conda installation metadata/history and pip direct-install provenance from the portable Python runtime; these are not needed to run the application and can contain developer-local paths.

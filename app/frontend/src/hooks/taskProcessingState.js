@@ -74,6 +74,11 @@ export function localizedTaskMessage(task, t = value => value) {
   const status = String(task?.status || '');
   const rawMessage = String(task?.message || '');
   const pipelineKey = STAGE_MESSAGES[task?.pipeline_stage] || STAGE_MESSAGES[status];
+  if (status === 'burning' && task?.video_codec && ['software_encoding', 'source_codec_encoding'].includes(rawMessage)) {
+    return formatMessage(t(rawMessage === 'software_encoding' ? 'softwareVideoEncoding' : 'sourceCodecVideoEncoding'), {
+      codec: task.video_codec,
+    });
+  }
   if (status === 'dubbing') {
     const speech = rawMessage.match(/正在合成语音\s*(\d+)\s*\/\s*(\d+)/);
     if (speech) return formatMessage(t('synthesizingSpeechChunk'), { current: speech[1], total: speech[2] });

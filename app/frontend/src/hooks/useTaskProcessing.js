@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
 import {
   completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
-  stageIdForEvent, localizedTaskMessage, STAGE_MESSAGES, STANDALONE_TRANSCRIPTION_STATUSES,
+  stageIdForEvent, localizedTaskMessage, STANDALONE_TRANSCRIPTION_STATUSES,
   standaloneTranscriptionCompletion, stageProgressForEvent, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
@@ -208,9 +208,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       return;
     }
     setProgress(value => stageProgressForEvent(event, value));
-    const eventStage = event.pipeline_stage || event.status;
     setCurrentStage(value => stageIdForEvent(event, value));
-    if (event.message) setMessage(STAGE_MESSAGES[eventStage] ? t(STAGE_MESSAGES[eventStage]) : localizedTaskMessage(event, t));
+    if (event.message) setMessage(localizedTaskMessage(event, t));
     // Translation artifacts are ready before synthesis starts, even if dubbing
     // later fails. Refresh here as well as on terminal events.
     if (route === 'dubbing' && ['pipeline_translated', 'pipeline_dubbing'].includes(event.status)) {

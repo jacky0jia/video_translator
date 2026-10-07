@@ -12,6 +12,7 @@ from app.core.history import history_manager
 from app.core.events import emit_event
 from app.core.schemas import TranscriptionResult
 from app.services.formatter_service import subtitle_formatter
+from app.services.video_encoding import encode_args, select_encoder
 
 logger = logging.getLogger(__name__)
 END_NOTE_URL = "https://github.com/jacky0jia/video_translator"
@@ -20,29 +21,6 @@ END_NOTE_URL = "https://github.com/jacky0jia/video_translator"
 class VideoBurnService:
     def __init__(self):
         self.ffmpeg_path = settings.ffmpeg_path
-        self.gpu_encoder = self._detect_gpu_encoder()
-
-    def _detect_gpu_encoder(self) -> Optional[str]:
-        """Detect available GPU encoder by checking ffmpeg -encoders."""
-        try:
-            result = subprocess.run(
-                [self.ffmpeg_path, "-encoders"],
-                capture_output=True, text=True, check=True
-            )
-            encoders = result.stdout
-            if "h264_nvenc" in encoders:
-                logger.info("GPU encoder detected: h264_nvenc (NVIDIA)")
-                return "h264_nvenc"
-            if "h264_qsv" in encoders:
-                logger.info("GPU encoder detected: h264_qsv (Intel)")
-                return "h264_qsv"
-            if "h264_amf" in encoders:
-                logger.info("GPU encoder detected: h264_amf (AMD)")
-                return "h264_amf"
-        except Exception as e:
-            logger.warning(f"Failed to detect GPU encoder: {e}")
-        logger.info("No GPU encoder detected, falling back to libx264")
-        return None
 
     def _load_transcription(self, path: str) -> Optional[TranscriptionResult]:
         try:
@@ -71,20 +49,34 @@ class VideoBurnService:
                 str(ffprobe_path),
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height,bit_rate,avg_frame_rate,pix_fmt,color_space,color_transfer,color_primaries:format=duration",
+                "-show_entries", "stream=codec_name,width,height,bit_rate,avg_frame_rate,pix_fmt,color_space,color_transfer,color_primaries:stream_tags=BPS,BPS-eng:format=duration,bit_rate,size",
                 "-of", "json",
                 str(video_path),
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
             data = json.loads(result.stdout)
             stream = data["streams"][0]
             bitrate = stream.get("bit_rate")
             duration = float((data.get("format") or {}).get("duration") or 0)
+            bitrate_source = 'stream'
+            if not str(bitrate or '').isdigit() or int(bitrate) <= 0:
+                tags = stream.get('tags') or {}
+                bitrate = tags.get('BPS') or tags.get('BPS-eng')
+                bitrate_source = 'stream_tags'
+            if not str(bitrate or '').isdigit() or int(bitrate) <= 0:
+                # MKV often omits stream bit_rate. Container average includes
+                # audio/overhead, so record it as an estimate, not exact video rate.
+                container = data.get('format') or {}
+                bitrate = container.get('bit_rate')
+                if (not str(bitrate or '').isdigit() or int(bitrate) <= 0) and duration > 0:
+                    bitrate = int(float(container.get('size') or video_path.stat().st_size) * 8 / duration)
+                bitrate_source = 'container_estimate'
             profile = {
                 "probed": True, "codec": str(stream.get("codec_name") or "unknown"),
                 "width": int(stream["width"]), "height": int(stream["height"]),
                 "duration": duration if duration > 0 else None,
                 "bitrate": int(bitrate) if str(bitrate or "").isdigit() else None,
+                "bitrate_source": bitrate_source,
                 "frame_rate": str(stream.get("avg_frame_rate") or "unknown"),
                 "pixel_format": str(stream.get("pix_fmt") or "unknown"),
                 "color_space": str(stream.get("color_space") or "unknown"),
@@ -98,47 +90,6 @@ class VideoBurnService:
             return {"probed": False, "codec": "unknown", "width": 1920, "height": 1080,
                     "duration": None, "bitrate": None, "frame_rate": "unknown", "pixel_format": "unknown",
                     "color_space": "unknown", "color_transfer": "unknown", "color_primaries": "unknown"}
-
-    def _get_video_bitrate(self, video_path: Path) -> Optional[int]:
-        """Return the source video bitrate so burn-in does not inflate files."""
-        try:
-            ffprobe_path = Path(self.ffmpeg_path).parent / "ffprobe.exe"
-            if not ffprobe_path.exists():
-                ffprobe_path = Path(self.ffmpeg_path).parent / "ffprobe"
-            result = subprocess.run(
-                [
-                    str(ffprobe_path), "-v", "error", "-select_streams", "v:0",
-                    "-show_entries", "stream=bit_rate", "-of", "json",
-                    str(video_path),
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            value = (json.loads(result.stdout).get("streams") or [{}])[0].get("bit_rate")
-            bitrate = int(value or 0)
-            return bitrate if bitrate > 0 else None
-        except Exception as exc:
-            logger.warning("Failed to probe source video bitrate: %s", exc)
-            return None
-
-    @staticmethod
-    def _video_encode_args(encoder: Optional[str], source_bitrate: Optional[int] = None) -> list[str]:
-        """Use quality-based H.264; AV1/HEVC bitrate is not a safe H.264 target."""
-        if encoder == "h264_nvenc":
-            return [
-                "-c:v", encoder, "-preset", "p7", "-tune", "hq", "-rc", "vbr",
-                "-multipass", "fullres", "-cq", "18", "-b:v", "0",
-                "-spatial_aq", "1", "-temporal_aq", "1", "-rc-lookahead", "32",
-            ]
-        if encoder == "h264_qsv":
-            return ["-c:v", encoder, "-global_quality", "18", "-preset", "slow"]
-        if encoder == "h264_amf":
-            return [
-                "-c:v", encoder, "-quality", "quality", "-rc", "cqp",
-                "-qp_p", "18", "-qp_i", "18",
-            ]
-        return ["-c:v", "libx264", "-preset", "slow", "-crf", "18"]
 
     @staticmethod
     def _video_output_args(profile: Dict[str, Any]) -> list[str]:
@@ -307,18 +258,24 @@ class VideoBurnService:
             output_name = f"{stem}_{suffix}_{ts}.mp4"
             output_path = settings.OUTPUT_DIR / output_name
             settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            encode_args = self._video_encode_args(self.gpu_encoder, source_profile["bitrate"])
+            plan = select_encoder(self.ffmpeg_path, source_profile)
+            encoding_args = encode_args(plan['encoder'], plan['bitrate'])
+            history_manager.update_task(task_id, {'video_encoding': plan})
+            def encoding_event(progress):
+                return {'status': 'burning', 'message': 'software_encoding' if plan['software'] else 'source_codec_encoding',
+                        'video_codec': plan['codec'].upper(), 'video_encoder': plan['encoder'],
+                        'target_lang': lang_display, 'progress': progress}
             output_args = self._video_output_args(source_profile)
             logger.info(
                 "Burn quality: source=%s encoder=%s args=%s",
                 source_profile,
-                self.gpu_encoder or "libx264",
-                encode_args,
+                plan['encoder'],
+                encoding_args,
             )
             cmd = [
                 self.ffmpeg_path, "-y", "-i", str(video_path_obj),
                 "-vf", f"ass={ass_path.name}",
-                *encode_args,
+                *encoding_args,
                 *output_args,
                 "-c:a", "copy",
                 str(output_path),
@@ -327,7 +284,7 @@ class VideoBurnService:
             logger.info(f"Starting burn for task {task_id}: {' '.join(cmd)}")
 
             history_manager.update_task(task_id, {"burn_status": "processing"})
-            emit_event(task_id, {"status": "burning", "message": "started", "target_lang": lang_display, "progress": 0})
+            emit_event(task_id, encoding_event(0))
 
             process = subprocess.Popen(
                 cmd,
@@ -349,7 +306,7 @@ class VideoBurnService:
                         progress = min(int((current_time / duration) * 100), 99)
                         if progress > last_progress:
                             last_progress = progress
-                            emit_event(task_id, {"status": "burning", "message": "processing", "target_lang": lang_display, "progress": progress})
+                            emit_event(task_id, encoding_event(progress))
 
             stderr_thread = threading.Thread(target=read_stderr, daemon=True)
             stderr_thread.start()
@@ -358,14 +315,17 @@ class VideoBurnService:
 
             if process.returncode != 0:
                 err = b"".join(stderr_lines).decode("utf-8", errors="replace")[-500:] if stderr_lines else "Unknown FFmpeg error"
-                # If GPU encoder failed, fallback to libx264 once
-                if self.gpu_encoder:
-                    logger.warning(f"GPU encoder {self.gpu_encoder} failed: {err}. Falling back to libx264.")
-                    self.gpu_encoder = None
+                # Hardware can fail mid-job despite preflight. Retry only with
+                # software for the SAME codec, never silently convert to H.264.
+                if not plan['software']:
+                    logger.warning('GPU encoder %s failed; trying same-codec software: %s', plan['encoder'], err)
+                    plan = select_encoder(self.ffmpeg_path, source_profile, software_only=True)
+                    history_manager.update_task(task_id, {'video_encoding': plan})
+                    emit_event(task_id, encoding_event(0))
                     cmd = [
                         self.ffmpeg_path, "-y", "-i", str(video_path_obj),
                         "-vf", f"ass={ass_path.name}",
-                        *self._video_encode_args(None, source_profile["bitrate"]),
+                        *encode_args(plan['encoder'], plan['bitrate']),
                         *output_args,
                         "-c:a", "copy",
                         str(output_path),

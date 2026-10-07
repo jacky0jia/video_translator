@@ -39,6 +39,8 @@ See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English i
 
 ## Features
 
+Source checkout rendering follows the source video codec (AV1/HEVC/H.264/VP9/MPEG-4) and uses its bitrate as a size target. Without burned subtitles or the end note, dubbing copies the original video stream. Re-encoding is not lossless or an exact-size guarantee. Hardware encoding is checked at runtime; same-codec software fallback is shown in progress. Software AV1 can be substantially slower for 4K/60 fps; SVT-AV1 is preferred when the installed FFmpeg includes it, otherwise libaom is used. Missing matching encoders produce an explicit error rather than a silent H.264 conversion. This change is not included in the alpha.5 portable download.
+
 - Local transcription with faster-whisper and automatic long-video chunking
 - Local LLM translation through LM Studio, with optional Ollama and OpenAI-compatible endpoints
 - SRT, VTT, and ASS export with translated, bilingual, or original subtitles

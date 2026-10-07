@@ -6,6 +6,14 @@ import { translations } from '../app/frontend/src/i18n/translations.js';
 
 const en = key => translations.en[key] || key;
 
+test('source-codec rendering and CPU fallback messages are localized', () => {
+  const event = { status: 'burning', pipeline_stage: 'pipeline_rendering', video_codec: 'AV1', message: 'software_encoding' };
+  assert.equal(localizedTaskMessage(event, en), 'Rendering AV1 on CPU; this may take longer...');
+  const zh = key => translations.zh[key] || key;
+  assert.equal(localizedTaskMessage(event, zh), '正在使用 CPU 渲染 AV1，可能需要较长时间...');
+  assert.equal(localizedTaskMessage({ ...event, message: 'source_codec_encoding' }, en), 'Rendering AV1 video...');
+});
+
 test('current-stage progress follows dubbing and rendering events', () => {
   assert.equal(stageProgressForEvent({ status: 'pipeline_dubbing', progress_percent: 75 }), 0);
   assert.equal(stageProgressForEvent({ status: 'dubbing', message: '正在合成语音 38/112...', progress: 27 }), 27);

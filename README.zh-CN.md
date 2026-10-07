@@ -32,6 +32,8 @@ FFmpeg、Kokoro/loader、Qwen 模型及 runtime 由用户从固定上游来源�
 
 ## 功能
 
+源码版渲染默认跟随源视频编码（AV1/HEVC/H.264/VP9/MPEG-4），并以源码率作为体积控制目标。不烧录字幕或片尾说明时，配音直接复制原视频流。重新编码并非无损，也不保证精确文件大小；硬件编码会实际检测，同编码的软件回退会在进度中提示。4K/60 fps 的 AV1 软件编码可能明显更慢：安装的 FFmpeg 支持 SVT-AV1 时优先使用，否则使用 libaom。没有匹配编码器时明确报错，不会静默转成 H.264。此改进尚未包含在 alpha.5 便携下载包中。
+
 - 使用 faster-whisper 本地转写，长视频自动分块
 - 使用 LM Studio 本地模型翻译，兼容 Ollama 和 OpenAI-compatible API
 - 导出 SRT、VTT、ASS，支持译文、双语或原文字幕

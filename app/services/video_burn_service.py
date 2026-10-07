@@ -13,6 +13,7 @@ from app.core.events import emit_event
 from app.core.schemas import TranscriptionResult
 from app.services.formatter_service import subtitle_formatter
 from app.services.video_encoding import encode_args, select_encoder
+from app.services.video_output import make_output_plan
 
 logger = logging.getLogger(__name__)
 END_NOTE_URL = "https://github.com/jacky0jia/video_translator"
@@ -222,6 +223,7 @@ class VideoBurnService:
         video_path_override: Optional[str] = None,
         output_field: str = "burn_path",
         end_note_enabled: bool = False,
+        output_options: Optional[dict] = None,
     ) -> str:
         if output_field not in {"burn_path", "dubbing_video_path"}:
             raise ValueError("Unsupported burn output field")
@@ -244,9 +246,16 @@ class VideoBurnService:
         ass_path: Optional[Path] = None
         lang_display = target_lang or task.get("target_lang") or ""
         try:
-            source_profile = self._probe_video_profile(video_path_obj)
+            profile_path = video_path_obj
+            if output_options is not None and output_field == 'dubbing_video_path':
+                original = Path(task.get('upload_path') or task.get('source_path') or '')
+                if original.is_file():
+                    profile_path = original
+            source_profile = self._probe_video_profile(profile_path)
             history_manager.update_task(task_id, {"source_video_profile": source_profile})
-            video_width, video_height = source_profile["width"], source_profile["height"]
+            plan = (make_output_plan(self.ffmpeg_path, source_profile, output_options)
+                    if output_options is not None else select_encoder(self.ffmpeg_path, source_profile))
+            video_width, video_height = plan.get('width', source_profile['width']), plan.get('height', source_profile['height'])
             ass_path, duration = self._generate_ass(
                 task, show_source, show_target, style, temp_dir, target_lang, video_width, video_height,
                 end_note_enabled, source_profile.get("duration") or 0, output_field == "dubbing_video_path",
@@ -258,7 +267,6 @@ class VideoBurnService:
             output_name = f"{stem}_{suffix}_{ts}.mp4"
             output_path = settings.OUTPUT_DIR / output_name
             settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            plan = select_encoder(self.ffmpeg_path, source_profile)
             encoding_args = encode_args(plan['encoder'], plan['bitrate'])
             history_manager.update_task(task_id, {'video_encoding': plan})
             def encoding_event(progress):
@@ -266,6 +274,10 @@ class VideoBurnService:
                         'video_codec': plan['codec'].upper(), 'video_encoder': plan['encoder'],
                         'target_lang': lang_display, 'progress': progress}
             output_args = self._video_output_args(source_profile)
+            def video_filter():
+                scale = (f"scale={video_width}:{video_height}," if
+                         (video_width, video_height) != (source_profile['width'], source_profile['height']) else '')
+                return scale + f"ass={ass_path.name}"
             logger.info(
                 "Burn quality: source=%s encoder=%s args=%s",
                 source_profile,
@@ -274,7 +286,7 @@ class VideoBurnService:
             )
             cmd = [
                 self.ffmpeg_path, "-y", "-i", str(video_path_obj),
-                "-vf", f"ass={ass_path.name}",
+                "-vf", video_filter(),
                 *encoding_args,
                 *output_args,
                 "-c:a", "copy",
@@ -315,16 +327,25 @@ class VideoBurnService:
 
             if process.returncode != 0:
                 err = b"".join(stderr_lines).decode("utf-8", errors="replace")[-500:] if stderr_lines else "Unknown FFmpeg error"
-                # Hardware can fail mid-job despite preflight. Retry only with
-                # software for the SAME codec, never silently convert to H.264.
+                # Hardware can fail after preflight. Legacy/source-codec/custom
+                # routes retain their codec; balanced routes may use alternatives.
                 if not plan['software']:
-                    logger.warning('GPU encoder %s failed; trying same-codec software: %s', plan['encoder'], err)
-                    plan = select_encoder(self.ffmpeg_path, source_profile, software_only=True)
+                    logger.warning('GPU encoder %s failed; replanning within the chosen output strategy: %s', plan['encoder'], err)
+                    if output_options is None:
+                        plan = select_encoder(self.ffmpeg_path, source_profile, software_only=True)
+                    else:
+                        plan = make_output_plan(self.ffmpeg_path, source_profile, output_options,
+                                                excluded_encoders=(plan['encoder'],))
+                        video_width, video_height = plan['width'], plan['height']
+                        ass_path, duration = self._generate_ass(
+                            task, show_source, show_target, style, temp_dir, target_lang, video_width, video_height,
+                            end_note_enabled, source_profile.get('duration') or 0, output_field == 'dubbing_video_path',
+                        )
                     history_manager.update_task(task_id, {'video_encoding': plan})
                     emit_event(task_id, encoding_event(0))
                     cmd = [
                         self.ffmpeg_path, "-y", "-i", str(video_path_obj),
-                        "-vf", f"ass={ass_path.name}",
+                        "-vf", video_filter(),
                         *encode_args(plan['encoder'], plan['bitrate']),
                         *output_args,
                         "-c:a", "copy",

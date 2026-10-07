@@ -39,7 +39,7 @@ See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English i
 
 ## Features
 
-Source checkout rendering follows the source video codec (AV1/HEVC/H.264/VP9/MPEG-4) and uses its bitrate as a size target. Without burned subtitles or the end note, dubbing copies the original video stream. Re-encoding is not lossless or an exact-size guarantee. Hardware encoding is checked at runtime; same-codec software fallback is shown in progress. Software AV1 can be substantially slower for 4K/60 fps; SVT-AV1 is preferred when the installed FFmpeg includes it, otherwise libaom is used. Missing matching encoders produce an explicit error rather than a silent H.264 conversion. This change is not included in the alpha.5 portable download.
+The source checkout adds a collapsible **Output video** section under Dubbing, showing actual source parameters and an estimated output plan. **Auto balanced** follows non-AV1 source codecs and bitrate; when AV1 hardware encoding is unavailable, it uses bitrate-controlled HEVC/H.264 up to 1440p, without upscaling or changing frame timing. Choose **Keep source resolution**, **Keep source codec**, or **Custom** to override this strategy. Keeping AV1 may require much slower CPU encoding. Hardware usability is checked; unavailable custom codecs are reported rather than silently replaced. Without burned subtitles or the end note, dubbing copies the original video stream regardless of output strategy. Re-encoding is not lossless and size estimates are not guarantees. These changes are not yet included in the alpha.5 portable download.
 
 - Local transcription with faster-whisper and automatic long-video chunking
 - Local LLM translation through LM Studio, with optional Ollama and OpenAI-compatible endpoints

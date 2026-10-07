@@ -1,4 +1,5 @@
 import copy
+import asyncio
 import json
 import logging
 import math
@@ -9,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from app.services.video_output import VideoOutputOptions, make_output_plan
 
 from app.core.config import settings
 from app.core.history import history_manager
@@ -74,6 +76,34 @@ class SegmentEdit(BaseModel):
     target_text: Optional[str] = None
     start: Optional[float] = None
     end: Optional[float] = None
+
+
+class VideoPlanRequest(BaseModel):
+    output_options: VideoOutputOptions
+    burn_subtitles: bool = False
+    end_note_enabled: bool = True
+
+
+@router.post('/tasks/{task_id}/video-plan')
+async def preview_video_plan(task_id: str, request: VideoPlanRequest):
+    task = history_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(404, 'Task not found')
+    source = contained_file(settings.UPLOAD_DIR, task.get('upload_path') or task.get('source_path') or '')
+    if source is None:
+        raise HTTPException(404, 'Source video file not found')
+    from app.services.video_burn_service import video_burn_service
+    def inspect():
+        profile = video_burn_service._probe_video_profile(source)
+        plan = make_output_plan(video_burn_service.ffmpeg_path, profile, request.output_options,
+                                overlays=request.burn_subtitles or request.end_note_enabled)
+        return profile, plan
+    try:
+        profile, plan = await asyncio.to_thread(inspect)
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    history_manager.update_task(task_id, {'source_video_profile': profile})
+    return {'source': profile, 'plan': plan}
 
 
 @router.get("/tasks")

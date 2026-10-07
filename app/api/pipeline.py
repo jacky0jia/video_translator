@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.services.tts.registry import is_korean_language, resolve_tts_route
 from app.services.tts.voice_selection import resolve_available_voice
 from app.services.dubbing_service import dubbing_service, NATURAL_MAX_KOKORO_TEMPO, NATURAL_MAX_EDGE_TEMPO
+from app.services.video_output import VideoOutputOptions
 
 router = APIRouter()
 
@@ -25,6 +26,7 @@ class PipelineRequest(BaseModel):
     subtitle_style: dict = Field(default_factory=dict)
     force_translate: bool = False
     force_dub: bool = False
+    output_options: VideoOutputOptions = Field(default_factory=VideoOutputOptions)
 
 
 class CompressionDecision(BaseModel):
@@ -73,6 +75,7 @@ async def start_pipeline(request: PipelineRequest):
                 "last_subtitle_format": request.subtitle_format.lower(),
                 "dubbing_burn_subtitles": request.burn_subtitles,
                 "last_end_note_enabled": request.end_note_enabled,
+                "video_output_options": request.output_options.model_dump(),
             },
         )
         pipeline_service.start(
@@ -88,6 +91,7 @@ async def start_pipeline(request: PipelineRequest):
             request.force_translate,
             request.force_dub,
             end_note_enabled=request.end_note_enabled,
+            output_options=request.output_options.model_dump(),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -117,6 +121,7 @@ async def decide_compression(task_id: str, decision: CompressionDecision):
             request["subtitle_style"], request["subtitle_format"],
             force_dub=True, compress_translation=True,
             end_note_enabled=request.get("end_note_enabled", True),
+            output_options=request.get("output_options"),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

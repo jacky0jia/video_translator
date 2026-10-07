@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+- Add a collapsible Dubbing “Output video” section with real source metadata, capability-tested output plans, estimated size, and automatic-balanced / original-resolution / original-codec / custom choices.
+- Default AV1 hardware fallback to bounded-bitrate HEVC/H.264 at up to 1440p, retaining aspect ratio and frame timing. Keep source codec/resolution as an explicit choice, and preserve the original video stream when no visual overlays are requested.
+- Save output choices per task and through compression approval; scale subtitle layout to the selected output resolution.
+
 - Preserve the source video codec when burning subtitles or the end note (AV1, HEVC, H.264, VP9 and MPEG-4), rather than unconditionally converting to high-bitrate H.264.
 - Use source video bitrate, MKV stream bitrate tags, or an explicitly marked container-average estimate as a VBR size target. Retain original frame timing and resolution; re-encoding is not lossless and final size may vary.
-- Verify hardware encoder usability before rendering; retry hardware failures only with same-codec software. Show localized CPU-rendering progress and clearly report missing encoders instead of silently switching codecs.
+- Verify hardware encoder usability before rendering and replan hardware failures within the selected output strategy. Show localized CPU-rendering progress and clearly report missing encoders; source-codec and custom choices never silently switch codecs.
 
 ## 0.1.0-alpha.5 - 2026-10-06
 

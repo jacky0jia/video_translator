@@ -1,6 +1,7 @@
 import { useI18n } from '../contexts/I18nContext';
 import { languageCode, PROCESS_STAGES, useTaskProcessing } from '../hooks/useTaskProcessing';
 import EmptyWorkflowState from './EmptyWorkflowState';
+import VideoOutputOptions from './VideoOutputOptions';
 
 const FORMATS = ['srt', 'vtt', 'ass'];
 const STAGE_LABEL_KEYS = { transcribe: 'stageTranscribe', translate: 'stageTranslate', dub: 'stageDub', render: 'stageRender' };
@@ -19,6 +20,7 @@ function OutputOptions({ processing }) {
     <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700"><span><strong className="block text-sm font-medium">{t('burnIntoVideo')}</strong><span className="text-xs text-slate-500 dark:text-slate-400">{t('burnIntoVideoHint')}</span></span><input type="checkbox" className="app-switch" checked={burn} onChange={e => setBurn(e.target.checked)} disabled={running} /></label>
     <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700"><span><strong className="block text-sm font-medium">{t('endNote')}</strong><span className="text-xs text-slate-500 dark:text-slate-400">{t('endNoteHint')}</span></span><input type="checkbox" className="app-switch" checked={endNoteEnabled} onChange={e => setEndNoteEnabled(e.target.checked)} disabled={running} /></label>
     {burn && <label className="block"><span className="app-field-label">{t('subtitleContent')}</span><select className="app-input w-full" value={subtitleContent} onChange={e => setSubtitleContent(e.target.value)} disabled={running}><option value="translated">{t('translationOnly')}</option><option value="bilingual">{t('sourceAndTranslation')}</option></select></label>}
+    <VideoOutputOptions processing={processing} />
     {ttsMode === 'qwen' ? <p className="app-note">{t('qwenFixedSpeed')}</p> : <label><span className="mb-1 flex justify-between text-sm"><span>{t('speechSpeed')}</span><strong>{speed.toFixed(2)}x</strong></span><input className="w-full accent-indigo-600" type="range" min="0.8" max="1.4" step="0.05" value={speed} onChange={e => setSpeed(Number(e.target.value))} disabled={running} /></label>}
     {voiceError && <p role="alert" className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-700 dark:bg-red-950/30 dark:text-red-200">{voiceError}</p>}
   </>;

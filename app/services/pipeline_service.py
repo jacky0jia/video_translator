@@ -168,6 +168,7 @@ class PipelineService:
         subtitle_style: dict[str, Any],
         video_path: Path,
         end_note_enabled: bool,
+        output_options: dict | None = None,
     ) -> None:
         from app.services.video_burn_service import video_burn_service
         await asyncio.to_thread(
@@ -180,6 +181,7 @@ class PipelineService:
             str(video_path),
             "dubbing_video_path",
             end_note_enabled,
+            output_options,
         )
 
     async def run(
@@ -197,6 +199,7 @@ class PipelineService:
         force_dub: bool = False,
         compress_translation: bool = False,
         end_note_enabled: bool = False,
+        output_options: dict | None = None,
     ) -> None:
         try:
             task = history_manager.get_task(task_id)
@@ -254,6 +257,7 @@ class PipelineService:
                     subtitle_style or {},
                     raw_video,
                     end_note_enabled,
+                    **({'output_options': output_options} if output_options is not None else {}),
                 )
                 history_manager.update_task(task_id, {
                     "dubbing_burn_subtitles": burn_subtitles,
@@ -301,6 +305,7 @@ class PipelineService:
                             "show_source": show_source, "show_target": show_target,
                             "subtitle_style": subtitle_style or {}, "subtitle_format": subtitle_format,
                             "end_note_enabled": end_note_enabled,
+                            "output_options": output_options,
                         },
                     }
                     history_manager.update_task(task_id, data)
@@ -336,6 +341,7 @@ class PipelineService:
         force_dub: bool = False,
         compress_translation: bool = False,
         end_note_enabled: bool = False,
+        output_options: dict | None = None,
     ) -> asyncio.Task:
         current = self._tasks.get(task_id)
         if current and not current.done():
@@ -355,6 +361,7 @@ class PipelineService:
                 force_dub,
                 compress_translation,
                 end_note_enabled,
+                output_options,
             ),
             name=f"pipeline-{task_id}",
         )

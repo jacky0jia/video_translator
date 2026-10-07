@@ -2,6 +2,8 @@
 import os
 import re
 import subprocess
+import time
+from functools import lru_cache
 
 
 ENCODERS = {
@@ -55,7 +57,20 @@ def encode_args(encoder, bitrate=None):
     return args
 
 
-def select_encoder(ffmpeg, profile, *, software_only=False):
+@lru_cache(maxsize=128)
+def _hardware_usable(ffmpeg, encoder, width, height, bitrate, time_bucket):
+    try:
+        probe = subprocess.run([
+            ffmpeg, '-hide_banner', '-v', 'error', '-f', 'lavfi', '-i',
+            f'color=s={width}x{height}:r=1', '-frames:v', '1',
+            *encode_args(encoder, bitrate), '-pix_fmt', 'yuv420p', '-f', 'null', '-',
+        ], capture_output=True, timeout=20)
+        return probe.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def select_encoder(ffmpeg, profile, *, software_only=False, hardware_only=False, excluded_encoders=()):
     codec = profile.get('codec')
     if not profile.get('probed') or codec not in ENCODERS:
         raise RuntimeError(f'Cannot preserve source video codec ({codec or "unknown"}). '
@@ -65,21 +80,15 @@ def select_encoder(ffmpeg, profile, *, software_only=False):
                             text=True, check=True, timeout=15)
     available = set(re.findall(r'^\s*V\S*\s+(\S+)', result.stdout, re.M))
     for encoder in ENCODERS[codec]:
-        if encoder not in available or (software_only and encoder not in SOFTWARE):
+        if (encoder not in available or encoder in excluded_encoders
+                or (software_only and encoder not in SOFTWARE)
+                or (hardware_only and encoder in SOFTWARE)):
             continue
         if encoder not in SOFTWARE:
             # Compiled-in support is not proof that this machine can encode it.
             # Use the actual frame dimensions to catch hardware resolution limits.
-            try:
-                probe = subprocess.run([
-                    ffmpeg, '-hide_banner', '-v', 'error', '-f', 'lavfi', '-i',
-                    f'color=s={profile["width"]}x{profile["height"]}:r=1',
-                    '-frames:v', '1', *encode_args(encoder, profile.get('bitrate')),
-                    '-pix_fmt', 'yuv420p', '-f', 'null', '-',
-                ], capture_output=True, timeout=20)
-                if probe.returncode:
-                    continue
-            except (OSError, subprocess.TimeoutExpired):
+            if not _hardware_usable(ffmpeg, encoder, profile['width'], profile['height'],
+                                    profile.get('bitrate'), int(time.monotonic() // 300)):
                 continue
         return {'codec': codec, 'encoder': encoder, 'software': encoder in SOFTWARE,
                 'bitrate': profile.get('bitrate'),

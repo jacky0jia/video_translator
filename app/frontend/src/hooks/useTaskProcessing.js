@@ -7,6 +7,7 @@ import {
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
+import { DEFAULT_VIDEO_OUTPUT } from '../components/VideoOutputOptions';
 
 export const PROCESS_STAGES = ['transcribe', 'translate', 'dub', 'render'];
 
@@ -33,6 +34,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [format, setFormat] = useState(task?.last_subtitle_format || 'srt');
   const [burn, setBurn] = useState(false);
   const [endNoteEnabled, setEndNoteEnabled] = useState(task?.last_end_note_enabled !== false);
+  const [videoOutput, setVideoOutput] = useState(() => ({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options }));
+  const [videoPlan, setVideoPlan] = useState(null);
+  const [videoPlanLoading, setVideoPlanLoading] = useState(false);
+  const [videoPlanError, setVideoPlanError] = useState('');
   const [subtitleContent, setSubtitleContent] = useState('translated');
   const [voices, setVoices] = useState([]);
   const [voice, setVoice] = useState('');
@@ -60,6 +65,34 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     () => completedStageIds(task, targetLang),
     [task, targetLang],
   );
+
+  useEffect(() => {
+    setVideoOutput({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options });
+    setVideoPlan(null);
+  }, [task?.task_id]);
+
+  useEffect(() => {
+    if (!task?.task_id || route !== 'dubbing' || running) return;
+    const controller = new AbortController();
+    setVideoPlanLoading(true);
+    setVideoPlanError('');
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/tasks/${task.task_id}/video-plan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+          body: JSON.stringify({ output_options: videoOutput, burn_subtitles: burn, end_note_enabled: endNoteEnabled }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : t('videoInvalidOptions'));
+        if (!controller.signal.aborted) setVideoPlan(data);
+      } catch (error) {
+        if (!controller.signal.aborted) { setVideoPlan(null); setVideoPlanError(error.message); }
+      } finally {
+        if (!controller.signal.aborted) setVideoPlanLoading(false);
+      }
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [task?.task_id, route, running, videoOutput, burn, endNoteEnabled, t]);
 
   useEffect(() => {
     let active = true;
@@ -323,6 +356,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
         subtitle_style: subtitleStyle || {},
         force_translate: forceTranslate,
         force_dub: forceDub,
+        output_options: videoOutput,
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -341,6 +375,16 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     setCurrentStage(firstStage);
     try {
       if (route === 'dubbing') {
+        // Validate and probe before expensive translation/synthesis, even if the
+        // folded preview has not finished loading yet.
+        const response = await fetch(`/api/tasks/${task.task_id}/video-plan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ output_options: videoOutput, burn_subtitles: burn, end_note_enabled: endNoteEnabled }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : t('videoInvalidOptions'));
+        setVideoPlan(data);
+        setVideoPlanLoading(false);
         await startDubbing({ forceTranslate, forceDub });
         return;
       }
@@ -402,5 +446,6 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     requiredStages, retryFailedStage, route, run, running, setBurn, setEndNoteEnabled, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
     subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,
+    videoOutput, setVideoOutput, videoPlan, videoPlanLoading, videoPlanError,
   };
 }

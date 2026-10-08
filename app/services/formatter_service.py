@@ -157,7 +157,7 @@ class SubtitleFormatter:
         # ASS Header
         s = settings
         orig_color = self._hex_to_ass_color(source_color) or "&H00FFFFFF"
-        trans_color = self._hex_to_ass_color(target_color) or "&H00FDE047"
+        trans_color = self._hex_to_ass_color(target_color) or "&H0047E0FD"
         margin_v = offset_y or 0
 
         # Use provided resolution or fall back to settings defaults
@@ -175,14 +175,12 @@ class SubtitleFormatter:
         font_name = font_family or getattr(s, 'ASS_FONT_NAME', 'Arial')
         logger.info(f"to_ass params: PlayResX={playres_x}, PlayResY={playres_y}, scale={scale:.2f}, margin_lr={margin_lr}, orig_font={orig_font}, trans_font={trans_font}, target_width={target_width}, bold={bold_val}, font={font_name}, font_size_input={font_size}")
 
-        # Match the video preview layout: both subtitle blocks are anchored to
-        # the bottom of the video, source above target. Use \pos to avoid libass
-        # collision handling reordering the lines.
+        # Anchor one subtitle block to the bottom, with source above target.
+        # libass wraps it using actual font metrics within the style margins.
         center_x = playres_x // 2
         # The preview uses the same 640-unit horizontal reference as font size.
         offset_px = margin_v * scale
         bottom_y = playres_y - 80 - offset_px
-        line_gap = 10
 
         lines = [
             "[Script Info]",
@@ -190,7 +188,7 @@ class SubtitleFormatter:
             f"PlayResX: {playres_x}",
             f"PlayResY: {playres_y}",
             "ScaledBorderAndShadow: yes",
-            "WrapStyle: 0",
+            "WrapStyle: 1",
             "",
             "[V4+ Styles]",
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
@@ -204,30 +202,21 @@ class SubtitleFormatter:
         for i, seg in enumerate(result.segments):
             start = self._format_timestamp(seg.start, "ass")
             end = self._format_timestamp(seg.end, "ass")
-            # Translate is rendered first (bottom block), then source sits above it.
-            trans_wrapped = None
-            trans_lines_count = 1
-            if show_target:
-                texts = self._collect_texts(i + 1, result, original_result if show_source else None, extra_results)
-                target_texts = texts[1:] if len(texts) > 1 else texts[:1]
-                for text in target_texts:
-                    trans_wrapped = self._wrap_text(text, font_size=trans_font, target_width=target_width)
-                    trans_lines_count = trans_wrapped.count(r"\N") + 1
-                    positioned = f"{{\\an2\\pos({center_x},{bottom_y})}}{trans_wrapped}"
-                    lines.append(f"Dialogue: 0,{start},{end},Translated,,0,0,0,,{positioned}")
-                    preview = trans_wrapped[:120].replace("\n", " ")
-                    logger.info(f"_wrap_text target seg {i}: {preview}...")
+            blocks = []
             if show_source and original_result and i < len(original_result.segments):
-                wrapped = self._wrap_text(original_result.segments[i].text, font_size=orig_font, target_width=target_width)
-                if show_source and show_target and trans_wrapped is not None:
-                    trans_height = trans_lines_count * trans_font
-                    orig_y = bottom_y - trans_height - line_gap
-                    positioned = f"{{\\an2\\pos({center_x},{orig_y})}}{wrapped}"
-                else:
-                    positioned = f"{{\\an2\\pos({center_x},{bottom_y})}}{wrapped}"
-                lines.append(f"Dialogue: 0,{start},{end},Original,,0,0,0,,{positioned}")
-                preview = wrapped[:120].replace("\n", " ")
-                logger.info(f"_wrap_text source seg {i}: {preview}...")
+                text = " ".join(original_result.segments[i].text.split())
+                blocks.append(f"{{\\fs{orig_font}\\c{orig_color}}}{text}")
+            if show_target:
+                target_texts = [seg.text]
+                if extra_results:
+                    target_texts.extend(er.segments[i].text for er in extra_results if i < len(er.segments))
+                for text in target_texts:
+                    text = " ".join(text.split())
+                    blocks.append(f"{{\\fs{trans_font}\\c{trans_color}}}{text}")
+            if blocks:
+                style = "Translated" if show_target else "Original"
+                positioned = f"{{\\an2\\pos({center_x},{bottom_y})}}" + r"\N".join(blocks)
+                lines.append(f"Dialogue: 0,{start},{end},{style},,0,0,0,,{positioned}")
 
         dialogue_lines = [l for l in lines if l.startswith("Dialogue:")]
         logger.info(f"to_ass generated {len(dialogue_lines)} dialogue lines. bottom_y={bottom_y}")

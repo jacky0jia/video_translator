@@ -534,6 +534,7 @@ async def retry_task(task_id: str, background_tasks: BackgroundTasks):
             "translation_path": None,
             "translations": {},
             "translation_profiles": {},
+            "translation_alignment_review": {},
             "subtitle_outputs": {},
             "pipeline_translation_targets": [],
             "pipeline_status": None,

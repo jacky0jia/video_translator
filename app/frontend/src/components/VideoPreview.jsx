@@ -5,6 +5,7 @@ import ProgressBar from './ProgressBar';
 import SubtitleStyleControls from './SubtitleStyleControls';
 import { findSubtitleOverlaps, parseSubtitleTime } from '../utils/subtitleTiming';
 import { subtitlePreviewLayout } from '../utils/subtitlePreviewLayout';
+import { subtitleReviewRows } from '../utils/subtitleReview';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -70,6 +71,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sourceSegments, setSourceSegments] = useState([]);
   const [targetSegments, setTargetSegments] = useState([]);
+  const [targetReview, setTargetReview] = useState(null);
+  const [pendingReviewRow, setPendingReviewRow] = useState(null);
   const [subSource, setSubSource] = useState('');
   const [subTarget, setSubTarget] = useState('');
   const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' }
@@ -224,12 +227,15 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   // Load segments when task or previewLang changes
   useEffect(() => {
     if (!task) return;
+    let cancelled = false;
+    setTargetReview(null);
+    setTargetSegments([]);
     async function load() {
       if (task.transcription_path) {
         try {
           const res = await fetch(task.transcription_path, { cache: 'no-store' });
           const data = await res.json();
-          setSourceSegments(data.segments || []);
+          if (!cancelled) setSourceSegments(data.segments || []);
         } catch (e) {
           console.error('Failed to load source segments:', e);
         }
@@ -241,17 +247,38 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
         try {
           const res = await fetch(transPath, { cache: 'no-store' });
           const data = await res.json();
-          setTargetSegments(data.segments || []);
+          if (!cancelled) {
+            setTargetSegments(data.segments || []);
+            setTargetReview(Array.isArray(data.alignment_review_rows) ? {
+              rows: data.alignment_review_rows, check_incomplete: data.alignment_check_incomplete,
+            } : null);
+          }
         } catch (e) {
           console.error('Failed to load target segments:', e);
-          setTargetSegments([]);
+          if (!cancelled) setTargetSegments([]);
         }
       } else {
         setTargetSegments([]);
       }
     }
     load();
+    return () => { cancelled = true; };
   }, [task, previewLang]);
+
+  const jumpToSubtitleRow = row => {
+    setSubtitleCollapsed(false);
+    setPendingReviewRow(row);
+  };
+
+  useEffect(() => {
+    if (subtitleCollapsed || pendingReviewRow === null) return;
+    const row = document.getElementById(`subtitle-row-${pendingReviewRow}`);
+    if (row) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.focus({ preventScroll: true });
+      setPendingReviewRow(null);
+    }
+  }, [subtitleCollapsed, pendingReviewRow, sourceSegments, targetSegments]);
 
   const handleTimeUpdate = () => {
     const time = videoRef.current?.currentTime || 0;
@@ -353,8 +380,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   }
 
   const maxLen = Math.max(sourceSegments.length, targetSegments.length);
-  const activeReview = task?.translation_alignment_review?.[previewLang || task?.target_lang] || {};
-  const reviewRows = new Set(activeReview.rows || []);
+  const activeReview = targetReview || task?.translation_alignment_review?.[previewLang || task?.target_lang] || {};
+  const reviewRows = new Set(subtitleReviewRows(activeReview.rows, targetSegments.length));
   const overlapPairs = findSubtitleOverlaps(sourceSegments);
   const overlapRows = new Set(overlapPairs.flat());
   const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
@@ -399,7 +426,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
         <div
           ref={subtitleRef}
           className="absolute left-1/2 z-[9999] -translate-x-1/2 text-center pointer-events-none break-words"
-          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth}px`, paddingInline: '5%' }}
+          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth * 0.9}px` }}
         >
           {showSource && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, marginBottom: showTarget ? `${previewLayout.lineGap}px` : 0, color: sourceColor || '#FFFFFF', fontFamily: fontFamily || 'Arial' }}>{subSource}</div>}
           {showTarget && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, color: targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{subTarget}</div>}
@@ -433,12 +460,12 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       <div className="mt-5">
         {overlapPairs.length > 0 && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t('subtitleOverlapNotice')}</p>
-          <div className="mt-2 flex flex-wrap gap-2">{overlapPairs.map(([first, second]) => <button key={`${first}-${second}`} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => { setSubtitleCollapsed(false); requestAnimationFrame(() => document.getElementById(`subtitle-row-${first}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })); }}>#{first}–#{second}</button>)}</div>
+          <div className="mt-2 flex flex-wrap gap-2">{overlapPairs.map(([first, second]) => <button key={`${first}-${second}`} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(first)}>#{first}–#{second}</button>)}</div>
         </div>}
         {(reviewRows.size > 0 || activeReview.check_incomplete) && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t('alignmentReviewNotice')}</p>
           {activeReview.check_incomplete && <p className="mt-1">{t('alignmentAuditUnavailable')}</p>}
-          {reviewRows.size > 0 && <div className="mt-2 flex flex-wrap gap-2">{[...reviewRows].map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => { setSubtitleCollapsed(false); requestAnimationFrame(() => document.getElementById(`subtitle-row-${row}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })); }}>#{row}</button>)}</div>}
+          {reviewRows.size > 0 && <div className="mt-2 flex flex-wrap gap-2">{[...reviewRows].map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>}
         </div>}
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-300">{t('subtitleTimeline')}</h3>
@@ -473,9 +500,10 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const isEditingTime = editingCell?.index === i && editingCell?.field === 'time';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i} id={`subtitle-row-${i + 1}`} role="row" title={overlapRows.has(i + 1) ? t('subtitleOverlapRow') : reviewRows.has(i + 1) ? t('alignmentReviewRow') : undefined}
+                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={overlapRows.has(i + 1) ? t('subtitleOverlapRow') : reviewRows.has(i + 1) ? t('alignmentReviewRow') : undefined}
                     className={`${overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                      <span className="text-xs text-slate-400">#{i + 1}</span>
                       {isEditingTime ? <div className="flex flex-col gap-1">
                         <input aria-label={t('startTime')} value={editStart} onChange={e => setEditStart(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
                         <input aria-label={t('endTime')} value={editEnd} onChange={e => setEditEnd(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />

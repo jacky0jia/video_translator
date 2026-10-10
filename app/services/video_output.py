@@ -59,11 +59,17 @@ def make_output_plan(ffmpeg: str, source: dict, options: VideoOutputOptions | di
             rate = int(rate * factor)
             if choices.policy == 'custom':
                 rate = int(choices.bitrate_mbps * 1_000_000)
+            # Static sources can have just a few kb/s. Newly burned text needs
+            # a real encoding budget; never override an explicit custom rate.
+            floor_applied = choices.policy != 'custom' and rate < 500_000
+            if floor_applied:
+                rate = 500_000
             target = {**source, 'codec': target_codec, 'width': w, 'height': h, 'bitrate': rate}
             selected = select_encoder(ffmpeg, target, hardware_only=hardware_only,
                                       excluded_encoders=excluded_encoders)
             return {**selected, 'width': w, 'height': h, 'reason': reason,
-                    'bitrate_estimated': estimated}
+                    'bitrate_estimated': estimated,
+                    'overlay_bitrate_floor_applied': floor_applied}
 
         if choices.policy == 'custom':
             plan = choose(choices.codec, choices.resolution, reason='custom')

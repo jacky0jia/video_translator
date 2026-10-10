@@ -12,7 +12,7 @@ from app.core.schemas import TranscriptionResult
 from app.core.file_security import MEDIA_EXTENSIONS, MAX_MEDIA_BYTES, save_upload, validate_file_component
 from app.services.asr_service import asr_service
 from app.services.audio_service import audio_service
-from app.services.chunking_service import chunking_service, deduplicate_segments
+from app.services.chunking_service import chunking_service, deduplicate_segments, bound_segments_to_duration
 
 router = APIRouter()
 
@@ -87,6 +87,9 @@ async def run_transcription_task(
                 emit_event(task_id, {"status": "transcribing", "message": "转录完成，正在保存结果...", "progress_percent": 99})
 
         # 3. Save as intermediate JSON
+        transcription_result.segments = bound_segments_to_duration(
+            transcription_result.segments, duration
+        )
         output_filename = f"{Path(filename).stem}_transcription_{task_id}"
         output_path = asr_service.save_to_json(transcription_result, output_filename)
 

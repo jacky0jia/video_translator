@@ -1,5 +1,7 @@
 @echo off
 setlocal
+cd /d "%~dp0"
+if errorlevel 1 exit /b 1
 chcp 65001 >nul
 if not defined APP_PORT set "APP_PORT=8769"
 if not defined APP_PYTHON set "APP_PYTHON=python"

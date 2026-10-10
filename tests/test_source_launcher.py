@@ -4,6 +4,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_source_launcher_changes_to_its_own_directory_before_importing():
+    launcher = (ROOT / "start.bat").read_text(encoding="utf-8")
+    assert 'cd /d "%~dp0"' in launcher
+    assert launcher.index('cd /d "%~dp0"') < launcher.index('"%APP_PYTHON%" -c ')
+    assert 'cd /d "%~dp0"\nif errorlevel 1 exit /b 1' in launcher
+
+
 def test_source_launcher_uses_one_configurable_python_environment():
     launcher = (ROOT / "start.bat").read_text(encoding="utf-8")
 

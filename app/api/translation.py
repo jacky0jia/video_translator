@@ -136,10 +136,13 @@ async def translate_transcription(
             )
 
         # 3. Check for translation failures
+        if len(translated_result.segments) != len(result.segments):
+            raise RuntimeError("Translation row count does not match source")
         failure_markers = {"Translation error", "[Translation failed]"}
         failed_segments = [
             index for index, seg in enumerate(translated_result.segments)
-            if not seg.text.strip() or seg.text.strip() in failure_markers
+            if (not seg.text.strip() and result.segments[index].text.strip())
+            or seg.text.strip() in failure_markers
         ]
         if failed_segments:
             err_msg = (

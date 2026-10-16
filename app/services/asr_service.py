@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle, provider_stage
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.services.hardware_service import hardware_service
+from app.services.asr_quality import transcribe_checked
 
 logger = logging.getLogger(__name__)
 
@@ -296,8 +297,8 @@ class ASRService:
         model = self._get_model()
 
         # transcribe returns a generator of segments
-        segments, info = model.transcribe(
-            str(audio_path),
+        segments, info = transcribe_checked(
+            model, str(audio_path),
             beam_size=settings.ASR_BEAM_SIZE,
             language=language,
             task="transcribe",

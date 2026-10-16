@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retry local ASR once on non-finite scores or pathological symbol repetition; fail explicitly if recovery still produces invalid output.
+- Read legacy null ASR confidence safely and preserve deliberately cleared subtitle rows without asking translation models to invent speech or shifting row numbers.
+
 - Add a collapsible Dubbing “Output video” section with real source metadata, capability-tested output plans, estimated size, and automatic-balanced / original-resolution / original-codec / custom choices.
 - Default AV1 hardware fallback to bounded-bitrate HEVC/H.264 at up to 1440p, retaining aspect ratio and frame timing. Keep source codec/resolution as an explicit choice, and preserve the original video stream when no visual overlays are requested.
 - Save output choices per task and through compression approval; scale subtitle layout to the selected output resolution.

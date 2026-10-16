@@ -7,6 +7,7 @@ import traceback
 from pathlib import Path
 
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
+from app.services.asr_quality import transcribe_checked
 
 
 def _worker_main(connection, model_args, transcribe_args):
@@ -22,8 +23,8 @@ def _worker_main(connection, model_args, transcribe_args):
                 break
             if command["type"] != "transcribe":
                 raise RuntimeError(f"Unknown ASR worker command: {command['type']}")
-            segments, info = model.transcribe(
-                command["audio_path"], language=command.get("language"), **transcribe_args
+            segments, info = transcribe_checked(
+                model, command["audio_path"], language=command.get("language"), **transcribe_args
             )
             connection.send({
                 "ok": True,

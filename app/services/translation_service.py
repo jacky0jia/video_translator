@@ -506,6 +506,29 @@ class TranslationService:
         """
         Orchestrates the sliding window translation process for the entire result.
         """
+        # A user may deliberately clear an erroneous source row. Keep its time
+        # slot and row number, but do not ask an LLM to invent missing speech.
+        active = [i for i, segment in enumerate(result.segments) if segment.text.strip()]
+        if len(active) != len(result.segments):
+            rows = [segment.model_copy(update={"text": ""}) for segment in result.segments]
+            if not active:
+                return result.model_copy(update={
+                    "language": target_lang, "segments": rows,
+                    "alignment_review_rows": [], "alignment_check_incomplete": False,
+                })
+            compact = result.model_copy(update={"segments": [result.segments[i] for i in active]})
+            translated = await self.translate_full_result(
+                compact, target_lang, batch_size, progress_callback, task_id, fit_to_duration
+            )
+            if len(translated.segments) != len(active):
+                raise ValueError("Translation row count does not match source")
+            for index, segment in zip(active, translated.segments):
+                rows[index] = segment
+            return translated.model_copy(update={
+                "segments": rows,
+                "alignment_review_rows": [active[row - 1] + 1 for row in translated.alignment_review_rows
+                                          if 1 <= row <= len(active)],
+            })
         if batch_size is None:
             batch_size = settings.TRANSLATION_BATCH_SIZE
         all_segments = result.segments

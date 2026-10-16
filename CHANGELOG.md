@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep segmented progress and completion scoped to the selected workflow; switching from completed subtitles to unrun dubbing no longer marks dubbing/rendering complete.
+
 - Retry local ASR once on non-finite scores or pathological symbol repetition; fail explicitly if recovery still produces invalid output.
 - Read legacy null ASR confidence safely and preserve deliberately cleared subtitle rows without asking translation models to invent speech or shifting row numbers.
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
 import {
-  completedStageIds, deriveTaskProcessingState, retryPlanForFailure, stageId,
+  completedStageIds, deriveTaskProcessingState, selectedWorkflowState, retryPlanForFailure, stageId,
   stageIdForEvent, localizedTaskMessage, STANDALONE_TRANSCRIPTION_STATUSES,
   standaloneTranscriptionCompletion, stageProgressForEvent, subtitleVisibility,
 } from './taskProcessingState';
@@ -472,11 +472,15 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     await refresh();
   };
 
+  const displayState = selectedWorkflowState(
+    { status, progress, currentStage, message, running }, completedStages, requiredStages, t,
+  );
   return {
     burn, cancel, completedStages, currentStage, decideCompression, endNoteEnabled, format, matchingVoices, message, progress,
     requiredStages, retryFailedStage, route, run, running, setBurn, setEndNoteEnabled, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
     subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,
     videoOutput, setVideoOutput, videoPlan, videoPlanLoading, videoPlanError,
+    ...displayState,
   };
 }

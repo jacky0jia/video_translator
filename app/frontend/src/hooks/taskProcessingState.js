@@ -52,6 +52,16 @@ export function completedStageIds(task, targetLang) {
   return completed;
 }
 
+export function selectedWorkflowState(state, completedStages, requiredStages, t = value => value) {
+  // Task-level completion may belong to another output route. Switching the
+  // form must not manufacture completed stages or mutate the saved task.
+  if (!state.running && state.status === 'completed'
+    && requiredStages.some(stage => !completedStages.includes(stage))) {
+    return { ...state, status: 'ready', progress: 0, currentStage: '', message: t('readyToProcess') };
+  }
+  return state;
+}
+
 export const STAGE_MESSAGES = {
   pipeline_transcribing: 'pipeline_transcribing',
   pipeline_translating: 'pipeline_translating',

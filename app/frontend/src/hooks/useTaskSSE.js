@@ -12,8 +12,11 @@ export function useTaskSSE(taskId, onEvent) {
 
     const connect = () => {
       if (closed) return;
-      source = new EventSource(`/api/tasks/${taskId}/events`);
-      source.onmessage = (e) => {
+      const connection = new EventSource(`/api/tasks/${taskId}/events`);
+      source = connection;
+      const isCurrent = () => !closed && source === connection;
+      connection.onmessage = (e) => {
+        if (!isCurrent()) return;
         try {
           const data = JSON.parse(e.data);
           onEventRef.current?.(data);
@@ -21,13 +24,16 @@ export function useTaskSSE(taskId, onEvent) {
           // ignore parse errors
         }
       };
-      source.addEventListener('not_found', () => {
+      connection.addEventListener('not_found', () => {
+        if (!isCurrent()) return;
         closed = true;
-        source.close();
+        connection.close();
         clearTimeout(retryTimeout);
       });
-      source.onerror = () => {
-        source.close();
+      connection.onerror = () => {
+        if (!isCurrent()) return;
+        connection.close();
+        source = null;
         if (!closed) {
           retryTimeout = setTimeout(connect, 1000);
         }

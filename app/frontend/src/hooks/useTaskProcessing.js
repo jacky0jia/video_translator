@@ -46,6 +46,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [voiceError, setVoiceError] = useState('');
   const [speed, setSpeed] = useState(1);
   const [running, setRunning] = useState(false);
+  const [startPending, setStartPending] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState('');
   const [message, setMessage] = useState(() => t('readyToProcess'));
@@ -170,14 +171,14 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     const persistedRunning = task?.pipeline_status === 'processing'
       || task?.dubbing_status === 'processing'
       || task?.burn_status === 'processing';
-    if (!persistedRunning || running || ['completed', 'failed', 'cancelled', 'awaiting_compression'].includes(status)) return;
+    if (!persistedRunning || running || startRequestRef.current) return;
     const restored = deriveTaskProcessingState(task, t);
     setProgress(restored.progress);
     setCurrentStage(restored.currentStage);
     setMessage(restored.message);
     setStatus(restored.status);
     setRunning(true);
-  }, [task?.status, task?.progress_percent, task?.message, task?.gpu_stage, task?.pipeline_stage, task?.pipeline_status, task?.dubbing_status, task?.burn_status, running, status, t]);
+  }, [task, t]);
 
   useEffect(() => {
     if (!isStandaloneTranscriptionEvent(task)) return;
@@ -229,7 +230,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     return data;
   }, [burn, format, route, subtitleContent, subtitleStyle, task]);
 
-  useTaskSSE(running ? task?.task_id : null, event => {
+  // During preflight/POST, a snapshot still belongs to the previous run.
+  // Subscribe only after the server has acknowledged this start.
+  useTaskSSE(startPending ? null : (running ? task?.task_id : null), event => {
     const transcriptionCompletion = standaloneTranscriptionCompletion(event, t);
     // The video-plan preflight subscribes while this task is still persisted as
     // transcribed. Its initial SSE snapshot is not a new transcription finish.
@@ -387,9 +390,11 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const run = async ({ forceTranslate = false, forceDub = false, resume = false } = {}) => {
     if (startRequestRef.current || running || !task?.transcription_path) return;
     startRequestRef.current = true;
+    setStartPending(route === 'dubbing');
     completionHandledRef.current = false;
     setRunning(true);
     setStatus('processing');
+    setMessage(t('processing'));
     const hasTranslation = Boolean(task.translations?.[targetLang] || (task.target_lang === targetLang && task.translation_path));
     const firstStage = forceTranslate || !hasTranslation ? 'translate' : route === 'dubbing' || forceDub ? 'dub' : burn ? 'render' : 'translate';
     setProgress(0);
@@ -407,6 +412,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
         setVideoPlan(data);
         setVideoPlanLoading(false);
         await startDubbing({ forceTranslate, forceDub });
+        refresh().catch(() => {});
         return;
       }
       await startSubtitles({ forceTranslate });
@@ -432,6 +438,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       showToast(error.message, 'error');
     } finally {
       startRequestRef.current = false;
+      setStartPending(false);
     }
   };
 
@@ -476,7 +483,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   );
   return {
     burn, cancel, completedStages, currentStage, decideCompression, endNoteEnabled, format, matchingVoices, message, progress,
-    requiredStages, retryFailedStage, route, run, running, setBurn, setEndNoteEnabled, setFormat,
+    requiredStages, retryFailedStage, route, run, running, startPending, setBurn, setEndNoteEnabled, setFormat,
     setRoute, setSpeed, setSubtitleContent, setVoice, speed, status,
     subtitleContent, targetLang, ttsMode, onlineLanguages, voice, voiceError,
     videoOutput, setVideoOutput, videoPlan, videoPlanLoading, videoPlanError,

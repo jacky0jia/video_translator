@@ -13,7 +13,7 @@ import { useTheme } from './contexts/ThemeContext';
 
 const ACTIVE_STATUSES = new Set([
   'pending', 'extracting_audio', 'waiting_for_gpu', 'switching_model', 'transcribing',
-  'translating', 'pipeline_transcribing', 'pipeline_translating', 'pipeline_translated',
+  'translating', 'pipeline_starting', 'pipeline_transcribing', 'pipeline_translating', 'pipeline_translated',
   'pipeline_dubbing', 'burning', 'dubbing',
 ]);
 

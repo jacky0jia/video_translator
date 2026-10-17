@@ -37,7 +37,8 @@ class PipelineUiSyncTests(unittest.TestCase):
         self.assertIn("error.httpStatus === 409", hook)
         self.assertIn("setRunning(true)", hook)
         self.assertIn("startRequestRef.current = false", hook)
-        self.assertIn("if (!persistedRunning || running || ['completed', 'failed', 'cancelled', 'awaiting_compression'].includes(status)) return", hook)
+        self.assertIn("if (!persistedRunning || running || startRequestRef.current) return", hook)
+        self.assertIn("useTaskSSE(startPending ? null :", hook)
         self.assertIn("const restored = deriveTaskProcessingState(task, t)", hook)
         self.assertIn("initial_data=_task_event_snapshot(task)", tasks_api)
 

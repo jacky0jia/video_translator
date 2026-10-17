@@ -346,7 +346,17 @@ class PipelineService:
         current = self._tasks.get(task_id)
         if current and not current.done():
             raise RuntimeError("Pipeline already running")
-        task = asyncio.create_task(
+        loop = asyncio.get_running_loop()
+        # A successful start response must never expose the previous terminal
+        # snapshot, even before the scheduled coroutine gets its first turn.
+        starting = {
+            "status": "pipeline_starting", "pipeline_status": "processing",
+            "pipeline_stage": None, "gpu_stage": None,
+            "message": "正在启动流水线...", "progress_percent": 0,
+            "failed_stage": None, "cancelled_stage": None,
+        }
+        history_manager.update_task(task_id, starting)
+        task = loop.create_task(
             self.run(
                 task_id,
                 target_lang,
@@ -366,6 +376,7 @@ class PipelineService:
             name=f"pipeline-{task_id}",
         )
         self._tasks[task_id] = task
+        emit_event(task_id, starting)
         return task
 
     async def cancel(self, task_id: str) -> bool:

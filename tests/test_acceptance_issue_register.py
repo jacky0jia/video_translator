@@ -38,3 +38,18 @@ def test_remediation_plan_covers_all_issues_lifecycle_audit_and_delivery_gates()
     assert "不能保证穷尽" in text
     assert "用户已明确选择：每次翻译完成都暂停，手动继续" in text
     assert "不重复卡在等待点" in text
+
+
+def test_manual_dubbing_recovery_identifies_source_rows_without_extra_buttons():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "specs/acceptance-remediation-plan-20261017.md").read_text(encoding="utf-8")
+    for requirement in (
+        "在字幕预览中高亮标识有问题的句子",
+        "点击行号滚动到对应字幕",
+        "不能直接把配音组序号当作字幕行号",
+        "与译文语义错位提示区分",
+        "重新测量通过后清除相应标记",
+        "继续沿用现有主按钮",
+        "尽量不新增按钮",
+    ):
+        assert requirement in text

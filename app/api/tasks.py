@@ -241,6 +241,8 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
                 data = json.load(f)
             segments = data.get("segments", [])
             if 0 <= index < len(segments):
+                if segments[index].get("text") != edit.source_text:
+                    segments[index]["source_text_edited"] = True
                 segments[index]["text"] = edit.source_text
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=4)

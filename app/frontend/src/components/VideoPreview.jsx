@@ -6,6 +6,7 @@ import SubtitleStyleControls from './SubtitleStyleControls';
 import { findSubtitleOverlaps, parseSubtitleTime } from '../utils/subtitleTiming';
 import { subtitlePreviewLayout } from '../utils/subtitlePreviewLayout';
 import { subtitleReviewRows } from '../utils/subtitleReview';
+import { transcriptionReview } from '../utils/transcriptionReview';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -177,6 +178,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       setVideoGeometry({
         containerWidth: bounds.width, containerHeight: bounds.height,
         videoWidth: video.videoWidth || 1920, videoHeight: video.videoHeight || 1080,
+        duration: video.duration,
       });
     };
     const observer = new ResizeObserver(update);
@@ -348,7 +350,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       if (payload.source_text !== undefined) {
         setSourceSegments(prev => {
           const next = [...prev];
-          next[index] = { ...next[index], text: editValue };
+          next[index] = { ...next[index], text: editValue, source_text_edited: true };
           return next;
         });
       }
@@ -384,6 +386,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const reviewRows = new Set(subtitleReviewRows(activeReview.rows, targetSegments.length));
   const overlapPairs = findSubtitleOverlaps(sourceSegments);
   const overlapRows = new Set(overlapPairs.flat());
+  const asrHints = transcriptionReview(sourceSegments, videoGeometry.duration);
+  const asrRows = new Map(asrHints.map(hint => [hint.row, hint.reason]));
   const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
   const isProcessing = !['transcribed', 'completed', 'failed', 'translation_failed', 'cancelled'].includes(task.status);
 
@@ -458,6 +462,10 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">
+        {asrHints.length > 0 && <div role="note" data-testid="asr-review-notice" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t('asrReviewNotice')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">{asrHints.map(({ row, reason }) => <button key={row} type="button" title={t(reason)} className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>
+        </div>}
         {overlapPairs.length > 0 && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t('subtitleOverlapNotice')}</p>
           <div className="mt-2 flex flex-wrap gap-2">{overlapPairs.map(([first, second]) => <button key={`${first}-${second}`} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(first)}>#{first}–#{second}</button>)}</div>
@@ -500,8 +508,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const isEditingTime = editingCell?.index === i && editingCell?.field === 'time';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={overlapRows.has(i + 1) ? t('subtitleOverlapRow') : reviewRows.has(i + 1) ? t('alignmentReviewRow') : undefined}
-                    className={`${overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
+                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={[asrRows.has(i + 1) ? t(asrRows.get(i + 1)) : '', overlapRows.has(i + 1) ? t('subtitleOverlapRow') : '', reviewRows.has(i + 1) ? t('alignmentReviewRow') : ''].filter(Boolean).join(' · ') || undefined}
+                    className={`${asrRows.has(i + 1) || overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       <span className="text-xs text-slate-400">#{i + 1}</span>
                       {isEditingTime ? <div className="flex flex-col gap-1">
@@ -539,7 +547,9 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                           </div>
                         </div>
                       ) : (
-                        <span onClick={() => startEdit(i, 'source')} className="text-slate-800 dark:text-slate-200 cursor-pointer">{src?.text || ''}</span>
+                        <span role={src ? 'button' : undefined} tabIndex={src ? 0 : undefined} aria-label={src ? `${t('source')} #${i + 1}` : undefined} onClick={src ? () => startEdit(i, 'source') : undefined}
+                          onKeyDown={e => { if (src && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); startEdit(i, 'source'); } }}
+                          className="block min-h-[1.5rem] text-slate-800 dark:text-slate-200 cursor-pointer">{src ? src.text || <span className="text-slate-400">{t('emptySubtitleEdit')}</span> : ''}</span>
                       )}
                     </td>
                     <td role="cell" data-label={t('target')} className="px-3 py-2">
@@ -563,7 +573,9 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                           </div>
                         </div>
                       ) : (
-                        <span onClick={() => startEdit(i, 'target')} className="text-yellow-600 dark:text-yellow-300 cursor-pointer">{tgt?.text || ''}</span>
+                        <span role={tgt ? 'button' : undefined} tabIndex={tgt ? 0 : undefined} aria-label={tgt ? `${t('target')} #${i + 1}` : undefined} onClick={tgt ? () => startEdit(i, 'target') : undefined}
+                          onKeyDown={e => { if (tgt && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); startEdit(i, 'target'); } }}
+                          className="block min-h-[1.5rem] text-yellow-600 dark:text-yellow-300 cursor-pointer">{tgt ? tgt.text || <span className="text-slate-400">{t('emptySubtitleEdit')}</span> : ''}</span>
                       )}
                     </td>
                   </tr>

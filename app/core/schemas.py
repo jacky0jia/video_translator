@@ -9,6 +9,8 @@ class TranscriptionSegment(BaseModel):
     end: float
     text: str
     confidence: float
+    # Source text changed by the user: do not second-guess it with ASR heuristics.
+    source_text_edited: bool = False
 
     @field_validator("confidence", mode="before")
     @classmethod

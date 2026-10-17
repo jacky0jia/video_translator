@@ -24,6 +24,14 @@ export function stageIdForEvent(event, currentStage = '') {
     || currentStage;
 }
 
+export function isStandaloneTranscriptionEvent(event) {
+  if (!STANDALONE_TRANSCRIPTION_STATUSES.has(event?.status)) return false;
+  if (event?.pipeline_status === 'processing'
+    || String(event?.pipeline_stage || '').startsWith('pipeline_')) return false;
+  const stage = stageId(event?.gpu_stage);
+  return !stage || stage === 'transcribe';
+}
+
 export function stageProgressForEvent(event, previous = 0) {
   const status = String(event?.status || '');
   if (event?.pipeline_status === 'completed' || ['completed', 'dubbing_completed', 'burning_completed'].includes(status)) return 100;

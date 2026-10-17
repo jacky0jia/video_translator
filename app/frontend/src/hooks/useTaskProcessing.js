@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
 import {
   completedStageIds, deriveTaskProcessingState, selectedWorkflowState, retryPlanForFailure, stageId,
-  stageIdForEvent, localizedTaskMessage, STANDALONE_TRANSCRIPTION_STATUSES,
+  stageIdForEvent, localizedTaskMessage, isStandaloneTranscriptionEvent,
   standaloneTranscriptionCompletion, stageProgressForEvent, subtitleVisibility,
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
@@ -180,7 +180,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, [task?.status, task?.progress_percent, task?.message, task?.gpu_stage, task?.pipeline_stage, task?.pipeline_status, task?.dubbing_status, task?.burn_status, running, status, t]);
 
   useEffect(() => {
-    if (!STANDALONE_TRANSCRIPTION_STATUSES.has(task?.status)) return;
+    if (!isStandaloneTranscriptionEvent(task)) return;
     if (task?.pipeline_status === 'processing' || task?.dubbing_status === 'processing' || task?.burn_status === 'processing') return;
     const live = deriveTaskProcessingState(task, t);
     setProgress(live.progress);
@@ -243,8 +243,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       refresh().catch(() => {});
       return;
     }
-    if (STANDALONE_TRANSCRIPTION_STATUSES.has(event.status)
-      && event.pipeline_status !== 'processing') {
+    if (isStandaloneTranscriptionEvent(event)) {
       setProgress(value => stageProgressForEvent(event, value));
       setCurrentStage('transcribe');
       setMessage(localizedTaskMessage(event, t));

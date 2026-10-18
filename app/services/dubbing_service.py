@@ -24,6 +24,7 @@ from app.core.gpu_lifecycle import gpu_provider_lifecycle
 from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.history import history_manager
 from app.core.events import emit_event
+from app.services.dubbing_review import dubbing_review_record
 from app.services.hardware_service import hardware_service
 from app.services.media_duration import probe_media_duration
 from app.core.schemas import TranscriptionResult
@@ -84,9 +85,10 @@ class DubbingCancelled(RuntimeError):
 class DubbingCompressionRequired(ValueError):
     """Measured speech cannot fit and stay synchronized without shorter text."""
 
-    def __init__(self, message: str, segment_indices: List[int]):
+    def __init__(self, message: str, segment_indices: List[int], *, issues=None):
         super().__init__(message)
         self.segment_indices = segment_indices
+        self.issues = list(issues or ())
 
 
 def _is_kokoro_mode() -> bool:
@@ -733,6 +735,30 @@ class DubbingService:
         chosen = [index for _, index in sorted(excesses, reverse=True)[:8]]
         return sorted({row for index in chosen for row in getattr(segments[index], "segment_indices", ())})
 
+    @classmethod
+    def _dubbing_sync_issues(cls, segments, durations, tempo, sentence_gap, total_duration, lead_seconds):
+        positions, _, _ = cls._natural_timeline_plan(segments, durations, tempo, sentence_gap, lead_seconds)
+        issues = []
+        for index, (segment, (start, end)) in enumerate(zip(segments, positions)):
+            deadline = float(segment.end) + NATURAL_MAX_SYNC_LAG_SECONDS
+            if index + 1 < len(segments):
+                deadline = min(deadline, float(segments[index + 1].start)
+                               + NATURAL_MAX_SYNC_LAG_SECONDS - sentence_gap)
+            else:
+                deadline = min(deadline, total_duration)
+            excess = max(0.0, end - deadline,
+                         start - float(segment.start) - NATURAL_MAX_SYNC_LAG_SECONDS)
+            if excess <= 0.000001:
+                continue
+            issues.append({
+                "segment_indices": list(getattr(segment, "segment_indices", ())),
+                "raw_seconds": round(durations[index], 3),
+                "fit_seconds": round(durations[index] / tempo, 3),
+                "available_seconds": round(max(0.0, deadline - start), 3),
+                "excess_seconds": round(excess, 3), "tempo": round(tempo, 3),
+            })
+        return issues
+
     @staticmethod
     def _percentile(values: List[float], percentile: float) -> float:
         """Return a linearly interpolated percentile without a NumPy dependency."""
@@ -862,6 +888,10 @@ class DubbingService:
                 f"视频末尾超出 {overflow:.1f} 秒；语音原长 {timing['raw_speech_seconds']:.1f} 秒，"
                 f"共 {len(segments)} 段。需要精简部分译文；确认前不会修改字幕。",
                 target_indices,
+                issues=self._dubbing_sync_issues(
+                    segments, durations, max_uniform_tempo, NATURAL_MIN_SENTENCE_GAP_SECONDS,
+                    total_duration, NATURAL_MAX_UTTERANCE_LEAD_SECONDS,
+                ),
             )
         positions, applied_start_lag, applied_end_lag = self._natural_timeline_plan(
             segments, durations, timeline_tempo, sentence_gap, lead_seconds
@@ -871,7 +901,7 @@ class DubbingService:
                        "max_start_lag_seconds": round(applied_start_lag, 3),
                        "max_end_lag_seconds": round(applied_end_lag, 3)})
         if task_id:
-            history_manager.update_task(task_id, {"dubbing_timing": timing})
+            history_manager.update_task(task_id, {"dubbing_timing": timing, "dubbing_review": None})
         logger.info(
             "Dubbing natural timeline uses one uniform tempo %.3fx, %.3fs sentence gaps, "
             "and up to %.3fs distributed lead (groups=%s, natural_end=%.3fs, video=%.3fs)",
@@ -1180,7 +1210,7 @@ class DubbingService:
             history_manager.update_task(
                 task_id,
                 {"dubbing_status": "awaiting_compression" if awaiting_pipeline_approval else "failed",
-                 "dubbing_error": str(exc)},
+                 "dubbing_error": str(exc), "dubbing_review": dubbing_review_record(exc, lang_label)},
             )
             emit_event(task_id, {"status": "dubbing_compression_required", "message": str(exc)})
             raise

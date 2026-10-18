@@ -7,6 +7,7 @@ import { findSubtitleOverlaps, parseSubtitleTime } from '../utils/subtitleTiming
 import { subtitlePreviewLayout } from '../utils/subtitlePreviewLayout';
 import { subtitleReviewRows } from '../utils/subtitleReview';
 import { transcriptionReview } from '../utils/transcriptionReview';
+import { dubbingReviewView, dubbingIssueMessage } from '../utils/dubbingReview';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -384,6 +385,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const maxLen = Math.max(sourceSegments.length, targetSegments.length);
   const activeReview = targetReview || task?.translation_alignment_review?.[previewLang || task?.target_lang] || {};
   const reviewRows = new Set(subtitleReviewRows(activeReview.rows, targetSegments.length));
+  const dubbingReview = dubbingReviewView(task?.dubbing_review, previewLang || task?.target_lang, sourceSegments.length);
+  const dubbingRows = new Set(dubbingReview.rows);
   const overlapPairs = findSubtitleOverlaps(sourceSegments);
   const overlapRows = new Set(overlapPairs.flat());
   const asrHints = transcriptionReview(sourceSegments, videoGeometry.duration);
@@ -462,6 +465,13 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">
+        {dubbingReview.active && <div role="note" data-testid="dubbing-sync-notice" className="mb-3 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-950 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100">
+          <p>{t('dubbingSyncNotice')}</p>
+          {task.dubbing_review.needs_recheck && <p className="mt-1">{t('dubbingSyncRecheck')}</p>}
+          {!dubbingReview.issues.length && <p className="mt-1">{t('dubbingSyncNoMeasurements')}</p>}
+          <div className="mt-2 flex flex-wrap gap-2">{dubbingReview.rows.map(row => <a key={row} href={`#subtitle-row-${row}`} onClick={event => { event.preventDefault(); jumpToSubtitleRow(row); }} className="rounded border border-rose-500 px-2 py-0.5 underline">#{row}</a>)}</div>
+          {dubbingReview.issues.length > 0 && <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">{dubbingReview.issues.map((issue, index) => <li key={index}>#{issue.rows.join(', #')}: {issue.measured ? dubbingIssueMessage(issue, t('dubbingSyncMeasurements')) : t('dubbingSyncNoMeasurements')}</li>)}</ul>}
+        </div>}
         {asrHints.length > 0 && <div role="note" data-testid="asr-review-notice" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t('asrReviewNotice')}</p>
           <div className="mt-2 flex flex-wrap gap-2">{asrHints.map(({ row, reason }) => <button key={row} type="button" title={t(reason)} className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>
@@ -508,8 +518,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const isEditingTime = editingCell?.index === i && editingCell?.field === 'time';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={[asrRows.has(i + 1) ? t(asrRows.get(i + 1)) : '', overlapRows.has(i + 1) ? t('subtitleOverlapRow') : '', reviewRows.has(i + 1) ? t('alignmentReviewRow') : ''].filter(Boolean).join(' · ') || undefined}
-                    className={`${asrRows.has(i + 1) || overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
+                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={[dubbingRows.has(i + 1) ? t('dubbingSyncRow') : '', asrRows.has(i + 1) ? t(asrRows.get(i + 1)) : '', overlapRows.has(i + 1) ? t('subtitleOverlapRow') : '', reviewRows.has(i + 1) ? t('alignmentReviewRow') : ''].filter(Boolean).join(' · ') || undefined}
+                    className={`${dubbingRows.has(i + 1) ? 'bg-rose-100/80 dark:bg-rose-900/30' : asrRows.has(i + 1) || overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       <span className="text-xs text-slate-400">#{i + 1}</span>
                       {isEditingTime ? <div className="flex flex-col gap-1">

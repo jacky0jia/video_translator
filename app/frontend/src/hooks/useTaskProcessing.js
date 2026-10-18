@@ -61,8 +61,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [status, setStatus] = useTaskScopedState(scope, 'ready');
   const [lastFailedStage, setLastFailedStage] = useTaskScopedState(scope, '');
   const { completionHandledRef, startRequestRef } = scope;
-  const taskStateIsStale = Number.isSafeInteger(task?.state_revision)
-    && task.state_revision < (scope.latestRevision ?? -1);
+  // Unversioned legacy details must not overwrite an accepted versioned event.
+  const taskStateIsStale = Number.isSafeInteger(scope.latestRevision)
+    && (!Number.isSafeInteger(task?.state_revision) || task.state_revision < scope.latestRevision);
 
   const targetLang = task?.target_lang || 'Chinese';
   const requiredStages = useMemo(() => route === 'dubbing'
@@ -245,6 +246,11 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   useEffect(() => {
     if (taskStateIsStale || startRequestRef.current) return;
     if (task?.pipeline_status === 'awaiting_review' || task?.status === 'awaiting_review') pauseForReview(task);
+    if (task?.pipeline_status === 'awaiting_dubbing_edit' || task?.status === 'awaiting_dubbing_edit') {
+      const restored = deriveTaskProcessingState(task, t);
+      setRunning(false); setStatus(restored.status); setCurrentStage(restored.currentStage);
+      setProgress(restored.progress); setMessage(restored.message);
+    }
   }, [task?.state_revision, task?.pipeline_status, task?.translation_reviews, t]);
 
   const createSubtitleFile = useCallback(async () => {
@@ -276,6 +282,13 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   // Subscribe only after the server has acknowledged this start.
   useTaskSSE(startPending ? null : (running ? task?.task_id : null), event => {
     if (Number.isSafeInteger(event.state_revision)) scope.latestRevision = Math.max(scope.latestRevision ?? -1, event.state_revision);
+    if (event.pipeline_status === 'awaiting_dubbing_edit' || event.status === 'awaiting_dubbing_edit') {
+      const restored = deriveTaskProcessingState(event, t);
+      setRunning(false); setStatus(restored.status); setCurrentStage(restored.currentStage);
+      setProgress(restored.progress); setMessage(restored.message);
+      refresh().catch(() => {}); return;
+    }
+    if (task?.dubbing_review && event.dubbing_review === null) refresh().catch(() => {});
     if (event.pipeline_status === 'awaiting_review' || event.status === 'awaiting_review') {
       pauseForReview(event); refresh().catch(() => {}); return;
     }
@@ -578,6 +591,11 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const displayState = selectedWorkflowState(
     { status, progress, currentStage, message, running }, completedStages, requiredStages, t,
   );
+  if (route === 'dubbing' && !displayState.running && ['ready', 'completed'].includes(displayState.status)
+      && task?.dubbing_review?.status === 'required' && task.dubbing_review.target_lang === targetLang) {
+    Object.assign(displayState, { status: 'awaiting_dubbing_edit', currentStage: 'dub', progress: 0,
+      message: t('dubbingManualEditRequired') });
+  }
   return {
     burn, cancel, completedStages, currentStage, decideCompression, endNoteEnabled, format, matchingVoices, message, progress,
     requiredStages, retryFailedStage, route, run, running, startPending, cancelPending,

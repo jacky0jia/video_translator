@@ -199,6 +199,7 @@ async def translate_transcription(
                     "translation_profiles": translation_profiles,
                     "pipeline_translation_targets": pipeline_translation_targets,
                     "translation_alignment_review": alignment_review,
+                    "dubbing_review": {**task["dubbing_review"], "needs_recheck": True} if task.get("dubbing_review") else None,
                 },
             )
             emit_event(task_id, {"status": final_status, "message": "completed", "target_lang": target_lang,

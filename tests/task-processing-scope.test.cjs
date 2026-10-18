@@ -406,3 +406,82 @@ test('late review failure for A cannot change B or show B an error', async () =>
   request.respond({ detail: 'old A changed' }, false, 409); await pending; await h.settle();
   assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
 });
+
+const manualTask = (extra = {}) => task('A', {
+  status: 'awaiting_dubbing_edit', pipeline_status: 'awaiting_dubbing_edit', dubbing_status: 'awaiting_edit',
+  compression_attempts: 2, state_revision: 20,
+  dubbing_review: { status: 'required', target_lang: 'Chinese', rows: [3, 4], issues: [] }, ...extra,
+});
+
+test('manual dubbing recovery restores idle and continues without another LLM round', async () => {
+  const h = await ready(manualTask());
+  assert.equal(h.view.status, 'awaiting_dubbing_edit'); assert.equal(h.view.running, false);
+  assert.equal(h.view.message, 'dubbingManualEditRequired'); assert.equal(h.requests.length, 0);
+  const { pending, request } = await reachPipeline(h);
+  const body = JSON.parse(request.options.body);
+  assert.equal(body.force_translate, false); assert.equal(body.review_id, null);
+  request.respond({ status: 'started' }); await pending; await h.settle();
+  assert.equal(h.view.running, true);
+});
+
+test('live manual wait beats old processing props and survives a language change', async () => {
+  const h = await ready(activeB());
+  h.event({ status: 'awaiting_dubbing_edit', pipeline_status: 'awaiting_dubbing_edit',
+    state_revision: 21, dubbing_review: manualTask().dubbing_review });
+  await h.settle();
+  assert.equal(h.view.status, 'awaiting_dubbing_edit'); assert.equal(h.view.running, false);
+  h.changeLanguage(); await h.settle();
+  assert.equal(h.view.status, 'awaiting_dubbing_edit'); assert.equal(h.requests.length, 0);
+});
+
+test('manual edits still pass through current-version subtitle confirmation', async () => {
+  const h = await ready(manualTask());
+  h.render(manualTask({ status: 'awaiting_review', pipeline_status: 'awaiting_review', state_revision: 22,
+    translation_reviews: { Chinese: { review_id: 'manually-edited', status: 'pending' } } }));
+  await h.settle();
+  assert.equal(h.view.status, 'awaiting_review');
+  const { pending, request } = await reachPipeline(h);
+  const body = JSON.parse(request.options.body);
+  assert.equal(body.review_id, 'manually-edited'); assert.equal(body.force_translate, false);
+  request.respond({ status: 'started' }); await pending;
+});
+
+test('subtitle completion cannot hide unresolved dubbing edits after switching routes', async () => {
+  const h = await ready(manualTask({ status: 'completed', pipeline_status: null, last_process_route: 'subtitles' }));
+  assert.equal(h.view.status, 'completed');
+  h.view.setRoute('dubbing'); h.render();
+  assert.equal(h.view.status, 'awaiting_dubbing_edit');
+  assert.equal(h.view.message, 'dubbingManualEditRequired');
+});
+
+test('retained timing marks do not mask a real provider failure', async () => {
+  const h = await ready(manualTask({ status: 'failed', pipeline_status: 'failed', message: 'provider offline' }));
+  assert.equal(h.view.status, 'failed'); assert.equal(h.view.message, 'provider offline');
+});
+
+test('successful timing remeasurement refreshes marks before the video is complete', async () => {
+  const h = await ready(manualTask({ status: 'dubbing', pipeline_status: 'processing', pipeline_stage: 'pipeline_dubbing' }));
+  h.event({ status: 'dubbing', pipeline_status: 'processing', message: 'muxing', progress: 90, dubbing_review: null });
+  await h.settle();
+  assert.equal(h.view.running, true); assert.ok(h.refreshes.length > 0);
+  assert.equal(h.toasts.length, 0);
+});
+
+test('dubbing row links use source mappings, filter absent rows and separate languages', () => {
+  const bundled = esbuild.buildSync({ entryPoints: [path.resolve(__dirname, '../app/frontend/src/utils/dubbingReview.js')],
+    bundle: true, platform: 'node', format: 'cjs', write: false }).outputFiles[0].text;
+  const mod = { exports: {} }; vm.runInNewContext(bundled, { module: mod, exports: mod.exports });
+  const review = { status: 'required', target_lang: 'Chinese', rows: [7, 6, 999, -1, true, 6],
+    issues: [{ group_index: 1000, segment_indices: [5, 6, 888, -1], raw_seconds: 10, fit_seconds: 6.25,
+      available_seconds: 3, excess_seconds: 3.25 }, { segment_indices: 'not an array' }, null] };
+  const { dubbingReviewView, dubbingIssueMessage } = mod.exports;
+  const result = dubbingReviewView(review, 'Chinese', 9);
+  assert.deepEqual([...result.rows], [6, 7]); assert.equal(result.issues.length, 1);
+  assert.deepEqual([...result.issues[0].rows], [6, 7]); assert.equal(result.issues[0].measured, true);
+  assert.equal(dubbingReviewView(review, 'Japanese', 9).active, false);
+  assert.equal(dubbingReviewView(null, 'Chinese', 9).active, false);
+  assert.equal(dubbingReviewView(review, 'Chinese', 0).rows.length, 0);
+  assert.equal(dubbingIssueMessage(result.issues[0], '{fit_seconds}/{available_seconds}/{excess_seconds}'), '6.25/3.00/3.25');
+  const invalid = dubbingReviewView({ ...review, issues: [{ segment_indices: [5], raw_seconds: NaN }] }, 'Chinese', 9);
+  assert.equal(invalid.issues[0].measured, false);
+});

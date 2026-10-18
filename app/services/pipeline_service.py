@@ -14,6 +14,7 @@ from app.core.events import emit_event, task_event_snapshot
 from app.core.history import history_manager
 from app.core.task_run import TaskRun, current_task_run, task_run_scope
 from app.services.translation_review_service import TranslationReviewService, translation_busy
+from app.services.dubbing_review import dubbing_review_record
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,7 @@ class PipelineService:
             if task["dubbing_provider_signature"] != synthesis_signature(provider):
                 return False
         return (
-            task.get("dubbing_status") == "completed"
+            task.get("dubbing_status") == "completed" and not task.get("dubbing_review")
             and task.get("dubbing_target_lang") == target_lang
             and task.get("dubbing_voice") == voice
             and abs(float(task.get("dubbing_speed", -1)) - float(speed)) < 0.0001
@@ -221,6 +222,7 @@ class PipelineService:
             "translation_path": str(output_path), "translations": translations,
             "subtitle_outputs": {}, "compression_attempts": attempt,
             "compression_revisions": revisions, "compression_request": None,
+            "dubbing_review": {**task["dubbing_review"], "needs_recheck": True} if task.get("dubbing_review") else None,
         })
 
     async def _default_burn(
@@ -359,6 +361,7 @@ class PipelineService:
                 "failed_stage": None,
                 "cancelled_stage": None,
                 "outputs_stale": False,
+                "dubbing_review": None,
             }
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)
@@ -390,10 +393,12 @@ class PipelineService:
             from app.services.dubbing_service import DubbingCompressionRequired
             if isinstance(exc, DubbingCompressionRequired):
                 task = history_manager.get_task(task_id) or {}
+                review = dubbing_review_record(exc, target_lang)
                 if int(task.get("compression_attempts") or 0) < 2 and exc.segment_indices:
                     data = {
                         "status": "awaiting_compression", "pipeline_status": "awaiting_compression",
                         "pipeline_stage": "pipeline_dubbing", "message": str(exc),
+                        "dubbing_review": review,
                         "compression_request": {
                             "segment_indices": exc.segment_indices, "target_lang": target_lang,
                             "voice": voice, "speed": speed, "burn_subtitles": burn_subtitles,
@@ -407,7 +412,16 @@ class PipelineService:
                     emit_event(task_id, data)
                     return
                 if int(task.get("compression_attempts") or 0) >= 2:
-                    exc = RuntimeError("两轮译文精简后仍无法保持字幕同步。请手动检查译文或更换音色。")
+                    data = {
+                        "status": "awaiting_dubbing_edit", "pipeline_status": "awaiting_dubbing_edit",
+                        "pipeline_stage": None, "gpu_stage": None, "progress_percent": 0,
+                        "dubbing_status": "awaiting_edit", "dubbing_review": review,
+                        "compression_request": None, "failed_stage": None,
+                        "message": "两轮精简后仍有配音同步问题。请修改标记的字幕，再点击继续重新测量。",
+                    }
+                    history_manager.update_task(task_id, data)
+                    emit_event(task_id, data)
+                    return
             logger.exception("Pipeline failed for task %s", task_id)
             task = history_manager.get_task(task_id) or {}
             data = {

@@ -325,6 +325,8 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
     if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update or index out of range")
 
+    if task.get("dubbing_review"):
+        history_manager.update_task(task_id, {"dubbing_review": {**task["dubbing_review"], "needs_recheck": True}})
     if task.get("translation_reviews") and task.get("target_lang"):
         TranslationReviewService(history_manager).pause(task_id, task["target_lang"])
         emit_event(task_id, _task_event_snapshot(history_manager.get_task(task_id)))

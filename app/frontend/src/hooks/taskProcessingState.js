@@ -184,6 +184,10 @@ export function deriveTaskProcessingState(task, t = value => value) {
     return { running: false, status: 'awaiting_review', progress: 0,
       currentStage: '', message: t('translationReviewRequired') };
   }
+  if (task?.pipeline_status === 'awaiting_dubbing_edit' || persistedStatus === 'awaiting_dubbing_edit') {
+    return { running: false, status: 'awaiting_dubbing_edit', progress: 0,
+      currentStage: 'dub', message: t('dubbingManualEditRequired') };
+  }
   const persistedStage = standaloneBurnRunning
     ? 'burning' : task?.pipeline_stage || task?.gpu_stage || persistedStatus;
   const running = task?.pipeline_status === 'processing'

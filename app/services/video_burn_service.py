@@ -270,9 +270,11 @@ class VideoBurnService:
             encoding_args = encode_args(plan['encoder'], plan['bitrate'])
             history_manager.update_task(task_id, {'video_encoding': plan})
             def encoding_event(progress):
-                return {'status': 'burning', 'message': 'software_encoding' if plan['software'] else 'source_codec_encoding',
+                event = {'status': 'burning', 'message': 'software_encoding' if plan['software'] else 'source_codec_encoding',
                         'video_codec': plan['codec'].upper(), 'video_encoder': plan['encoder'],
                         'target_lang': lang_display, 'progress': progress}
+                history_manager.update_task(task_id, {**event, 'progress_percent': progress})
+                return event
             output_args = self._video_output_args(source_profile)
             def video_filter():
                 scale = (f"scale={video_width}:{video_height}," if

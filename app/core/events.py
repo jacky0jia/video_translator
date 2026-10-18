@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 
 from app.core.config import settings
 
@@ -70,7 +70,8 @@ def emit_event(task_id: str, data: Dict[str, Any]) -> None:
             logger.debug("SSE listener loop already closed for task %s", task_id)
 
 
-async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] = None):
+async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] = None,
+                          *, snapshot_loader: Optional[Callable[[], Optional[Dict[str, Any]]]] = None):
     """
     Async generator that yields SSE formatted events for a task.
     Sends initial_data immediately if provided.
@@ -78,18 +79,34 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
     """
     queue = _get_queue(task_id)
 
-    # Send initial state if available
-    if initial_data:
-        yield f"data: {json.dumps(_browser_event(initial_data))}\n\n"
-
     try:
+        # Read only after registering the queue: a completion between the HTTP
+        # handler's history read and stream startup must not be lost forever.
+        snapshot = snapshot_loader() if snapshot_loader else initial_data
+        if snapshot_loader and snapshot is None:
+            yield 'event: not_found\ndata: {"detail":"Task not found"}\n\n'
+            return
+        if snapshot:
+            yield f"data: {json.dumps(_browser_event(snapshot))}\n\n"
         while True:
             # Wait for next event with a timeout to keep connection alive
             try:
                 data = await asyncio.wait_for(queue.get(), timeout=settings.SSE_KEEPALIVE_TIMEOUT)
             except asyncio.TimeoutError:
-                # Send a keep-alive comment to prevent proxy timeouts
-                yield ":ping\n\n"
+                # An event may have been missed or the queue may have filled.
+                # Reconcile from persisted state rather than ping forever.
+                if snapshot_loader:
+                    snapshot = snapshot_loader()
+                    if snapshot is None:
+                        yield 'event: not_found\ndata: {"detail":"Task not found"}\n\n'
+                        return
+                    yield f"data: {json.dumps(_browser_event(snapshot))}\n\n"
+                    active = any(snapshot.get(key) == "processing" for key in
+                                 ("pipeline_status", "dubbing_status", "burn_status"))
+                    if not active and snapshot.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled"):
+                        return
+                else:
+                    yield ":ping\n\n"
                 continue
 
             yield f"data: {json.dumps(_browser_event(data))}\n\n"

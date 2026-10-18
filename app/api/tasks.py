@@ -23,6 +23,7 @@ router = APIRouter()
 _TASK_EVENT_FIELDS = (
     "status", "message", "progress_percent", "pipeline_status", "pipeline_stage",
     "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
+    "burn_error", "video_codec", "video_encoder",
 )
 
 
@@ -178,8 +179,12 @@ async def task_events(task_id: str):
             media_type="text/event-stream",
         )
 
+    def current_snapshot():
+        current = history_manager.get_task(task_id)
+        return _task_event_snapshot(current) if current is not None else None
+
     return StreamingResponse(
-        event_generator(task_id, initial_data=_task_event_snapshot(task)),
+        event_generator(task_id, initial_data=_task_event_snapshot(task), snapshot_loader=current_snapshot),
         media_type="text/event-stream",
     )
 

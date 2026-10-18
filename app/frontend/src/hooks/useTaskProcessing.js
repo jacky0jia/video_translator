@@ -253,9 +253,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       return;
     }
     if (route === 'subtitles') {
-      if (event.status !== 'translating') return;
+      if (!['translating', 'burning'].includes(event.status)) return;
       setProgress(value => stageProgressForEvent(event, value));
-      setCurrentStage('translate');
+      setCurrentStage(event.status === 'burning' ? 'render' : 'translate');
       setMessage(localizedTaskMessage(event, t));
       return;
     }
@@ -323,7 +323,14 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     for (;;) {
       await new Promise(resolve => setTimeout(resolve, 900));
       const response = await fetch(`/api/burn/${task.task_id}`);
-      const data = await response.json();
+      let data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        // A failed status request is not proof that the background render failed.
+        const persisted = await fetch(`/api/tasks/${task.task_id}`, { cache: 'no-store' });
+        const latest = await persisted.json().catch(() => ({}));
+        if (!persisted.ok || !latest.task) throw new Error(data.detail || 'Unable to read video rendering status');
+        data = latest.task;
+      }
       if (data.burn_status === 'completed') return;
       if (data.burn_status === 'failed') throw new Error(data.burn_error || 'Video rendering failed');
     }
@@ -353,7 +360,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || 'Unable to start video rendering');
-      await waitForBurn();
+      refresh().catch(() => {});
+      await waitForBurn().catch(error => { error.failedStage = 'burning'; throw error; });
     }
   };
 
@@ -433,9 +441,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       }
       setRunning(false);
       setStatus('failed');
-      setLastFailedStage(currentStage || 'translate');
+      setLastFailedStage(error.failedStage || firstStage);
       setMessage(error.message);
       showToast(error.message, 'error');
+      refresh().catch(() => {});
     } finally {
       startRequestRef.current = false;
       setStartPending(false);

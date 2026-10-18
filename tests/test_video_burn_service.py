@@ -104,6 +104,11 @@ class VideoBurnRateControlTests(unittest.TestCase):
         commands = [call.args[0] for call in popen.call_args_list]
         self.assertEqual([cmd[cmd.index('-c:v') + 1] for cmd in commands], ['av1_nvenc', 'libaom-av1'])
         self.assertTrue(any(call.args[1].get('message') == 'software_encoding' for call in event.call_args_list))
+        saved_progress = [call.args[1] for call in history.update_task.call_args_list
+                          if call.args[1].get('status') == 'burning']
+        self.assertTrue(saved_progress)
+        self.assertTrue(all(item['progress_percent'] == item['progress'] for item in saved_progress))
+        self.assertTrue(any(item['video_encoder'] == 'libaom-av1' for item in saved_progress))
 
     def test_source_color_metadata_is_forwarded(self):
         args = VideoBurnService._video_output_args({"color_space": "bt709", "color_transfer": "bt709", "color_primaries": "bt709"})

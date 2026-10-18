@@ -38,7 +38,7 @@ export function stageProgressForEvent(event, previous = 0) {
   // Pipeline progress_percent is an overall milestone, not progress inside the new stage.
   if (status.startsWith('pipeline_') || (String(event?.pipeline_stage || '').startsWith('pipeline_')
     && !['transcribing', 'extracting_audio', 'translating', 'dubbing', 'burning'].includes(status))) return 0;
-  const raw = ['dubbing', 'burning'].includes(status) ? event?.progress : event?.progress_percent;
+  const raw = ['dubbing', 'burning'].includes(status) ? (event?.progress ?? event?.progress_percent) : event?.progress_percent;
   if (raw === null || raw === undefined || raw === '') return previous;
   const numeric = Number(raw);
   return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric))) : previous;
@@ -174,7 +174,9 @@ export function standaloneTranscriptionCompletion(event, t = value => value) {
 
 export function deriveTaskProcessingState(task, t = value => value) {
   const persistedStatus = task?.status || '';
-  const persistedStage = task?.pipeline_stage || task?.gpu_stage || persistedStatus;
+  const standaloneBurnRunning = task?.burn_status === 'processing' && task?.pipeline_status !== 'processing';
+  const persistedStage = standaloneBurnRunning
+    ? 'burning' : task?.pipeline_stage || task?.gpu_stage || persistedStatus;
   const running = task?.pipeline_status === 'processing'
     || task?.dubbing_status === 'processing'
     || task?.burn_status === 'processing'
@@ -182,7 +184,7 @@ export function deriveTaskProcessingState(task, t = value => value) {
   const hasPersistedProgress = task?.progress_percent !== null && task?.progress_percent !== undefined;
   const numericProgress = Number(task?.progress_percent);
   const progress = running
-    ? stageProgressForEvent(task)
+    ? stageProgressForEvent(standaloneBurnRunning ? { ...task, status: 'burning', pipeline_status: null } : task)
     : (hasPersistedProgress && Number.isFinite(numericProgress) ? numericProgress : 0);
 
   if (running) {
@@ -208,6 +210,13 @@ export function deriveTaskProcessingState(task, t = value => value) {
   if (task?.pipeline_status === 'awaiting_compression') {
     return { running: false, status: 'awaiting_compression', progress,
       currentStage: 'dub', message: t('compressionApprovalRequired') };
+  }
+  // Legacy standalone burn failures may coexist with an older pipeline's
+  // completed flag. Do not let that historical flag hide the latest failure.
+  if (task?.last_process_route === 'subtitles' && task?.last_burn_enabled === true &&
+      task?.burn_status === 'failed' && persistedStatus !== 'translating') {
+    return { running: false, status: 'failed', progress, currentStage: 'render',
+      message: task.burn_error || task.message || t('statusFailed') };
   }
   if (task?.pipeline_status === 'failed' || ['failed', 'translation_failed'].includes(persistedStatus)) {
     return {

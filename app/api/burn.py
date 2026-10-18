@@ -8,6 +8,7 @@ from app.core.history import history_manager
 from app.core.events import emit_event
 from app.services.video_burn_service import video_burn_service
 from app.services.pipeline_service import pipeline_service
+from app.services.translation_review_service import TranslationReviewService, translation_busy
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,8 +45,11 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    if pipeline_service.is_busy(request.task_id):
+    if pipeline_service.is_busy(request.task_id) or translation_busy(request.task_id):
         raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
+    if request.show_target and task.get("translation_reviews"):
+        if not TranslationReviewService(history_manager).is_approved(request.task_id, request.target_lang or task.get("target_lang")):
+            raise HTTPException(status_code=409, detail="Review the current subtitles before rendering")
     video_path = task.get("upload_path") or task.get("source_path")
     if not video_path:
         raise HTTPException(status_code=400, detail="Source video path not found")

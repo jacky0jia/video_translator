@@ -13,7 +13,7 @@ TASK_EVENT_FIELDS = (
     "status", "message", "progress_percent", "pipeline_status", "pipeline_stage",
     "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
     "burn_error", "video_codec", "video_encoder", "pipeline_run_id",
-    "pipeline_cleanup_pending", "state_revision",
+    "pipeline_cleanup_pending", "state_revision", "translation_reviews", "translation_review_language",
 )
 
 
@@ -126,6 +126,8 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
         if snapshot:
             last_revision = _revision(snapshot)
             yield f"data: {json.dumps(_browser_event(snapshot))}\n\n"
+            if not _active(snapshot) and snapshot.get("status") == "awaiting_review":
+                return
         while True:
             # Wait for next event with a timeout to keep connection alive
             try:
@@ -143,7 +145,7 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
                         continue
                     last_revision = version if version is not None else last_revision
                     yield f"data: {json.dumps(_browser_event(snapshot))}\n\n"
-                    if not _active(snapshot) and snapshot.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled"):
+                    if not _active(snapshot) and snapshot.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled", "awaiting_review"):
                         return
                 else:
                     yield ":ping\n\n"
@@ -168,7 +170,7 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
             yield f"data: {json.dumps(_browser_event(data))}\n\n"
 
             # Terminal statuses — close the stream
-            if not _active(data) and data.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled"):
+            if not _active(data) and data.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled", "awaiting_review"):
                 break
     except asyncio.CancelledError:
         # Normal shutdown, don't propagate to ASGI

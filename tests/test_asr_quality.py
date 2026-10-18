@@ -109,6 +109,11 @@ class ClearedSubtitleTests(unittest.IsolatedAsyncioTestCase):
             ]}), encoding="utf-8")
             history = Mock()
             history.get_task.return_value = {"task_id": "task", "transcription_path": str(source)}
+            history.update_task.side_effect = lambda _id, updates: history.get_task.return_value.update(updates)
+            def compare_review(_id, revision, updates):
+                history.get_task.return_value.update(updates, state_revision=revision + 1)
+                return dict(history.get_task.return_value)
+            history.compare_and_update_task.side_effect = compare_review
             service = TranslationService()
             service.translate_batch = AsyncMock(return_value=["正常"])
             service._audit_batch_alignment = AsyncMock(return_value=[])

@@ -16,6 +16,13 @@ class History:
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # These stage/cache unit tests start after manual review. The real
+        # persistent pause/continue boundary is covered in test_translation_review_flow.
+        reviewer = patch.object(PipelineService, "_review_translation", return_value=False)
+        reviewer.start()
+        self.addCleanup(reviewer.stop)
+
     async def test_full_state_machine_runs_in_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

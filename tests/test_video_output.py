@@ -188,7 +188,7 @@ class VideoPlanApiTests(unittest.IsolatedAsyncioTestCase):
             history.update_task.side_effect = lambda _, values: task.update(values)
             burn, dub = AsyncMock(), AsyncMock()
             options = {'policy': 'resolution'}
-            with patch('app.services.pipeline_service.history_manager', history), patch('app.services.pipeline_service.emit_event'):
+            with patch('app.services.pipeline_service.history_manager', history), patch('app.services.pipeline_service.emit_event'), patch.object(PipelineService, '_review_translation', return_value=False):
                 await PipelineService(burn_stage=burn, dub_stage=dub).run(
                     'one', 'Chinese', 'voice', end_note_enabled=True, output_options=options)
             burn.assert_awaited_once()

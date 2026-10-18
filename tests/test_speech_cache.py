@@ -240,6 +240,8 @@ class SelectiveSynthesisTests(unittest.IsolatedAsyncioTestCase):
             history = SimpleNamespace(get_task=lambda _task: task,
                                       update_task=lambda _task, data: task.update(data))
             pipeline = PipelineService(translate_stage=AsyncMock())
+            # This synthesis/cache unit test supplies already-reviewed scripts.
+            pipeline._review_translation = lambda *_args, **_kwargs: False
             timeline = self.service._build_timeline
             with patch.object(settings, "TEMP_DIR", root / "temp"), patch.object(settings, "OUTPUT_DIR", root / "output"), patch.object(
                 settings, "TTS_MODE", "edge"

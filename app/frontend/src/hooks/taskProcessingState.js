@@ -180,6 +180,10 @@ export function deriveTaskProcessingState(task, t = value => value) {
       currentStage: stageId(task?.cancelled_stage || task?.pipeline_stage), message: t('pipelineStopping') };
   }
   const standaloneBurnRunning = task?.burn_status === 'processing' && task?.pipeline_status !== 'processing';
+  if (task?.pipeline_status === 'awaiting_review' || persistedStatus === 'awaiting_review') {
+    return { running: false, status: 'awaiting_review', progress: 0,
+      currentStage: '', message: t('translationReviewRequired') };
+  }
   const persistedStage = standaloneBurnRunning
     ? 'burning' : task?.pipeline_stage || task?.gpu_stage || persistedStatus;
   const running = task?.pipeline_status === 'processing'

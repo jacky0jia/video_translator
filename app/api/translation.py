@@ -10,7 +10,8 @@ from app.core.config import settings
 from app.core.history import history_manager
 from app.core.task_run import current_task_run
 from app.services.pipeline_service import pipeline_service
-from app.core.events import emit_event
+from app.core.events import emit_event, task_event_snapshot
+from app.services.translation_review_service import TranslationReviewService, exclusive_translation, translation_busy
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.core.file_security import validate_file_component
 from app.services.formatter_service import subtitle_formatter
@@ -60,6 +61,7 @@ def _resolve_fs_path(path_str: Optional[str]) -> Optional[Path]:
 
 
 @router.post("/translate")
+@exclusive_translation
 async def translate_transcription(
     json_path: str = Form(...), target_lang: str = Form("Chinese"), task_id: Optional[str] = Form(None),
     pipeline: bool = False,
@@ -76,6 +78,9 @@ async def translate_transcription(
     resolved_path = json_path
     if task_id:
         task = history_manager.get_task(task_id)
+        if (task and not current_task_run(task_id)
+                and (task.get("dubbing_status") == "processing" or task.get("burn_status") == "processing")):
+            raise HTTPException(status_code=409, detail="Task is still processing or stopping")
         if task and task.get("transcription_path"):
             resolved_path = task["transcription_path"]
 
@@ -199,11 +204,19 @@ async def translate_transcription(
             emit_event(task_id, {"status": final_status, "message": "completed", "target_lang": target_lang,
                                  "alignment_review_rows": translated_result.alignment_review_rows,
                                  "alignment_check_incomplete": translated_result.alignment_check_incomplete})
+            reviews = TranslationReviewService(history_manager)
+            reviews.request(task_id, target_lang)
+            if not pipeline or not current_task_run(task_id):
+                reviews.pause(task_id, target_lang)
+                emit_event(task_id, task_event_snapshot(history_manager.get_task(task_id)))
 
         return {
             "status": "success",
             "translated_file": str(output_path),
             "target_language": target_lang,
+            "review_required": bool(task_id),
+            "state_revision": (history_manager.get_task(task_id) or {}).get("state_revision") if task_id else None,
+            "review": ((history_manager.get_task(task_id) or {}).get("translation_reviews") or {}).get(target_lang) if task_id else None,
         }
 
     except Exception as e:
@@ -242,6 +255,15 @@ async def export_subtitles(
     task = None
     if task_id:
         task = history_manager.get_task(task_id)
+
+    if task_id and translation_busy(task_id):
+        raise HTTPException(status_code=409, detail="Translation is still processing")
+    if (task and not current_task_run(task_id)
+            and (task.get("dubbing_status") == "processing" or task.get("burn_status") == "processing")):
+        raise HTTPException(status_code=409, detail="Task is still processing or stopping")
+    if task and mode != "original" and task.get("translation_reviews"):
+        if not TranslationReviewService(history_manager).is_approved(task_id, task.get("target_lang")):
+            raise HTTPException(status_code=409, detail="Review the current subtitles before exporting")
 
     # Resolve paths based on mode
     resolved_path = json_path
@@ -327,6 +349,8 @@ async def export_subtitles(
                     "last_subtitle_format": ext,
                     "last_process_route": "dubbing" if process_route == "dubbing" else "subtitles",
                     "last_burn_enabled": bool(burn_enabled) if process_route != "dubbing" else False,
+                    **({"status": "completed", "pipeline_status": None, "progress_percent": 100}
+                       if process_route == "subtitles" and not burn_enabled else {}),
                 },
             )
 

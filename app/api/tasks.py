@@ -17,6 +17,9 @@ from app.core.history import history_manager
 from app.core.events import event_generator, emit_event, TASK_EVENT_FIELDS
 from app.core.file_security import contained_file
 from app.services.pipeline_service import pipeline_service
+from app.services.translation_review_service import (
+    TranslationReviewService, TranslationReviewConflict, TranslationReviewUnavailable, translation_busy,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -193,6 +196,36 @@ async def emit_task_event(task_id: str, status: str, message: str = ""):
     return {"status": "emitted"}
 
 
+class TranslationReviewDecision(BaseModel):
+    target_lang: str
+    review_id: Optional[str] = None
+
+
+@router.post("/tasks/{task_id}/translation-review")
+async def review_translation(task_id: str, decision: TranslationReviewDecision):
+    task = history_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if (pipeline_service.is_busy(task_id) or translation_busy(task_id)
+            or task.get("dubbing_status") == "processing" or task.get("burn_status") == "processing"):
+        raise HTTPException(status_code=409, detail="Task is still processing or stopping")
+    service = TranslationReviewService(history_manager)
+    try:
+        if decision.review_id:
+            service.approve(task_id, decision.target_lang, decision.review_id)
+        else:
+            service.pause(task_id, decision.target_lang)
+    except TranslationReviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TranslationReviewUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    state = history_manager.get_task(task_id)
+    emit_event(task_id, _task_event_snapshot(state))
+    return {"approved": service.is_approved(task_id, decision.target_lang),
+            "state_revision": state.get("state_revision"),
+            "review": (state.get("translation_reviews") or {}).get(decision.target_lang)}
+
+
 @router.post("/tasks/{task_id}/segments/{index}")
 async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
     """
@@ -203,7 +236,8 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    if pipeline_service.is_busy(task_id):
+    if (pipeline_service.is_busy(task_id) or translation_busy(task_id)
+            or task.get("dubbing_status") == "processing" or task.get("burn_status") == "processing"):
         raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     updated = []
     timing_edit = edit.start is not None or edit.end is not None
@@ -290,6 +324,10 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
 
     if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update or index out of range")
+
+    if task.get("translation_reviews") and task.get("target_lang"):
+        TranslationReviewService(history_manager).pause(task_id, task["target_lang"])
+        emit_event(task_id, _task_event_snapshot(history_manager.get_task(task_id)))
 
     return {"status": "success", "updated": updated}
 

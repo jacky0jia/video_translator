@@ -22,6 +22,12 @@ class _History:
 
 
 class DubbingApprovalTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Isolate compression consent from the earlier subtitle-review boundary.
+        reviewer = patch.object(PipelineService, "_review_translation", return_value=False)
+        reviewer.start()
+        self.addCleanup(reviewer.stop)
+
     def test_video_end_note_defaults_on_and_can_be_disabled(self):
         self.assertTrue(PipelineRequest(task_id="one").end_note_enabled)
         self.assertTrue(BurnRequest(task_id="one").end_note_enabled)

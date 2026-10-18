@@ -188,7 +188,9 @@ def test_cancelled_real_thread_cannot_publish_or_overlap_a_new_pipeline(owned_hi
         monkeypatch.setattr(video_burn_service, 'burn', worker)
         service = PipelineService()
         if stage == 'burn':
+            # Ownership tests exercise a worker after subtitle review.
             monkeypatch.setattr(service, '_can_reuse_dubbing', lambda *_: True)
+        monkeypatch.setattr(service, '_review_translation', lambda *_args, **_kwargs: False)
         service.start(task_id, 'Chinese', 'voice', burn_subtitles=stage == 'burn')
         pending_workers = []
         try:

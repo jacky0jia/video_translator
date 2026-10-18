@@ -11,8 +11,41 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
+from functools import wraps
+from inspect import signature
 from pathlib import Path
 from uuid import uuid4
+
+_translation_jobs: set[str] = set()
+_jobs_lock = threading.Lock()
+
+
+def translation_busy(task_id: str) -> bool:
+    with _jobs_lock:
+        return task_id in _translation_jobs
+
+
+def exclusive_translation(function):
+    """Reserve a task across the async provider call; always release on cancel."""
+    parameters = signature(function)
+
+    @wraps(function)
+    async def guarded(*args, **kwargs):
+        from fastapi import HTTPException
+        task_id = parameters.bind_partial(*args, **kwargs).arguments.get("task_id")
+        if not task_id:
+            return await function(*args, **kwargs)
+        with _jobs_lock:
+            if task_id in _translation_jobs:
+                raise HTTPException(status_code=409, detail="Translation is still processing")
+            _translation_jobs.add(task_id)
+        try:
+            return await function(*args, **kwargs)
+        finally:
+            with _jobs_lock:
+                _translation_jobs.discard(task_id)
+    return guarded
 
 
 class TranslationReviewConflict(RuntimeError):
@@ -80,15 +113,42 @@ class TranslationReviewService:
             raise TranslationReviewUnavailable("Task not found")
         return task
 
-    def _save(self, task: dict, target_lang: str, review: dict) -> dict:
+    def _save(self, task: dict, target_lang: str, review: dict, updates=None) -> dict:
         reviews = dict(task.get("translation_reviews") or {})
         reviews[target_lang] = review
         state = self.history.compare_and_update_task(
-            task["task_id"], _revision(task), {"translation_reviews": reviews},
+            task["task_id"], _revision(task), {**(updates or {}), "translation_reviews": reviews},
         )
         if not state:
             raise TranslationReviewConflict("Task changed; refresh before reviewing subtitles")
         return dict(review)
+
+    def pause(self, task_id: str, target_lang: str) -> bool:
+        """Persist an idle review boundary, without regenerating edited text."""
+        if self.is_approved(task_id, target_lang):
+            return False
+        task = self._task(task_id)
+        fingerprint = translation_fingerprint(task, target_lang)
+        review = (task.get("translation_reviews") or {}).get(target_lang) or {}
+        if review.get("status") != "pending" or review.get("fingerprint") != fingerprint:
+            review = {"review_id": uuid4().hex, "fingerprint": fingerprint, "status": "pending"}
+        updates = {
+            "status": "awaiting_review", "pipeline_status": "awaiting_review",
+            "pipeline_stage": None, "gpu_stage": None, "progress_percent": 0,
+            "translation_review_language": target_lang, "target_lang": target_lang,
+            "translation_path": (task.get("translations") or {}).get(target_lang) or task.get("translation_path"),
+            "message": "翻译已完成，请检查字幕后点击继续。",
+            "failed_stage": None, "cancelled_stage": None,
+            "subtitle_outputs": {}, "outputs_stale": bool(
+                task.get("dubbing_audio_path") or task.get("dubbing_video_path")
+                or task.get("dubbing_raw_video_path") or task.get("burn_path")
+            ),
+        }
+        for stage in ("dubbing", "burn"):
+            if task.get(f"{stage}_status") == "completed":
+                updates[f"{stage}_status"] = "stale"
+        self._save(task, target_lang, review, updates)
+        return True
 
     def request(self, task_id: str, target_lang: str) -> dict:
         """Always create a fresh decision token, including for identical output."""
@@ -109,7 +169,11 @@ class TranslationReviewService:
             raise TranslationReviewConflict("Subtitles changed; review the edited version first")
         if review["status"] == "approved":
             return dict(review)  # A repeated click is idempotent, not a new decision.
-        return self._save(task, target_lang, {**review, "status": "approved"})
+        updates = {}
+        if task.get("pipeline_status") == "awaiting_review":
+            updates = {"status": "transcribed", "pipeline_status": None,
+                       "pipeline_stage": None, "gpu_stage": None, "message": "字幕已确认"}
+        return self._save(task, target_lang, {**review, "status": "approved"}, updates)
 
     def is_approved(self, task_id: str, target_lang: str) -> bool:
         try:

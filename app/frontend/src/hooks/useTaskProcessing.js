@@ -235,6 +235,18 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     await onTaskRefresh?.(task.task_id);
   }, [onTaskRefresh, task?.task_id]);
 
+  const pauseForReview = data => {
+    scope.reviewId = data?.review?.review_id || data?.translation_reviews?.[targetLang]?.review_id || scope.reviewId;
+    scope.reviewRevision = data?.state_revision ?? scope.reviewRevision;
+    setRunning(false); setStatus('awaiting_review'); setCurrentStage('');
+    setProgress(0); setMessage(t('translationReviewRequired'));
+  };
+
+  useEffect(() => {
+    if (taskStateIsStale || startRequestRef.current) return;
+    if (task?.pipeline_status === 'awaiting_review' || task?.status === 'awaiting_review') pauseForReview(task);
+  }, [task?.state_revision, task?.pipeline_status, task?.translation_reviews, t]);
+
   const createSubtitleFile = useCallback(async () => {
     const body = new URLSearchParams();
     body.append('json_path', task.translation_path || task.transcription_path);
@@ -264,6 +276,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   // Subscribe only after the server has acknowledged this start.
   useTaskSSE(startPending ? null : (running ? task?.task_id : null), event => {
     if (Number.isSafeInteger(event.state_revision)) scope.latestRevision = Math.max(scope.latestRevision ?? -1, event.state_revision);
+    if (event.pipeline_status === 'awaiting_review' || event.status === 'awaiting_review') {
+      pauseForReview(event); refresh().catch(() => {}); return;
+    }
     if (event.pipeline_cleanup_pending || event.pipeline_status === 'cancelling') {
       const restored = deriveTaskProcessingState(event, t);
       setProgress(restored.progress); setCurrentStage(restored.currentStage);
@@ -344,7 +359,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, task?.state_revision);
 
   const ensureTranslation = async (force = false) => {
-    if (!force && task.translations?.[targetLang]) return;
+    if (!force && (task.translations?.[targetLang] || (task.target_lang === targetLang && task.translation_path))) return false;
     setCurrentStage('translate');
     setProgress(0);
     setMessage(t('translating'));
@@ -359,6 +374,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || 'Translation failed');
+    pauseForReview(data);
+    return true;
   };
 
   const waitForBurn = async () => {
@@ -378,8 +395,20 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     }
   };
 
-  const startSubtitles = async ({ forceTranslate = false } = {}) => {
-    await ensureTranslation(forceTranslate);
+  const startSubtitles = async ({ forceTranslate = false, reviewId = null } = {}) => {
+    if (await ensureTranslation(forceTranslate)) {
+      await refresh();
+      return false;
+    }
+    const reviewResponse = await fetch(`/api/tasks/${task.task_id}/translation-review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_lang: targetLang, review_id: reviewId }),
+    });
+    const review = await reviewResponse.json().catch(() => ({}));
+    if (!reviewResponse.ok) throw new Error(review.detail || 'Subtitle review failed');
+    if (!review.approved) {
+      pauseForReview(review); await refresh(); return false;
+    }
     await refresh();
     setProgress(100);
     setMessage(t('creatingSubtitleFile'));
@@ -405,9 +434,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       refresh().catch(() => {});
       await waitForBurn().catch(error => { error.failedStage = 'burning'; throw error; });
     }
+    return true;
   };
 
-  const startDubbing = async ({ forceTranslate = false, forceDub = false } = {}) => {
+  const startDubbing = async ({ forceTranslate = false, forceDub = false, reviewId = null } = {}) => {
     if (!voice) throw new Error(`${t('noVoiceAvailable')}: ${targetLang}`);
     const visibility = subtitleVisibility(subtitleContent, showSource, showTarget, burn);
     const response = await fetch('/api/pipeline', {
@@ -425,6 +455,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
         subtitle_style: subtitleStyle || {},
         force_translate: forceTranslate,
         force_dub: forceDub,
+        review_id: reviewId,
         output_options: videoOutput,
       }),
     });
@@ -447,6 +478,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     setMessage(t('processing'));
     const hasTranslation = Boolean(task.translations?.[targetLang] || (task.target_lang === targetLang && task.translation_path));
     const firstStage = forceTranslate || !hasTranslation ? 'translate' : route === 'dubbing' || forceDub ? 'dub' : burn ? 'render' : 'translate';
+    const latestReviewId = scope.reviewRevision > (task?.state_revision ?? -1)
+      ? scope.reviewId : task?.translation_reviews?.[targetLang]?.review_id || scope.reviewId;
+    const reviewId = !forceTranslate && (status === 'awaiting_review' || task?.pipeline_status === 'awaiting_review')
+      ? latestReviewId || null : null;
     setProgress(0);
     setCurrentStage(firstStage);
     try {
@@ -461,11 +496,11 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
         if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : t('videoInvalidOptions'));
         setVideoPlan(data);
         setVideoPlanLoading(false);
-        await startDubbing({ forceTranslate, forceDub });
+        await startDubbing({ forceTranslate, forceDub, reviewId });
         refresh().catch(() => {});
         return;
       }
-      await startSubtitles({ forceTranslate });
+      if (!await startSubtitles({ forceTranslate, reviewId })) return;
       setProgress(100);
       setStatus('completed');
       setCurrentStage('');

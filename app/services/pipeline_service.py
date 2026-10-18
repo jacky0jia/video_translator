@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.events import emit_event, task_event_snapshot
 from app.core.history import history_manager
 from app.core.task_run import TaskRun, current_task_run, task_run_scope
+from app.services.translation_review_service import TranslationReviewService, translation_busy
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +249,14 @@ class PipelineService:
             output_options,
         )
 
+    def _review_translation(self, task_id: str, target_lang: str, *, regenerated=False) -> bool:
+        if regenerated:
+            TranslationReviewService(history_manager).request(task_id, target_lang)
+        if TranslationReviewService(history_manager).pause(task_id, target_lang):
+            emit_event(task_id, task_event_snapshot(history_manager.get_task(task_id)))
+            return True
+        return False
+
     async def run(
         self,
         task_id: str,
@@ -277,6 +286,7 @@ class PipelineService:
 
             task = history_manager.get_task(task_id) or {}
             translation_path = (task.get("translations") or {}).get(target_lang)
+            regenerated = False
             if (
                 force_translate
                 or not translation_path
@@ -285,10 +295,15 @@ class PipelineService:
                 self._set_stage(task_id, "pipeline_translating", "正在翻译...", 40)
                 stage = self._translate_stage or self._default_translate
                 await stage(task_id, target_lang)
+                regenerated = True
 
             if compress_translation:
                 self._set_stage(task_id, "pipeline_translating", "正在精简已确认的译文...", 60)
                 await self._compress_translation(task_id, target_lang)
+                regenerated = True
+
+            if self._review_translation(task_id, target_lang, regenerated=regenerated):
+                return
 
             task = history_manager.get_task(task_id) or {}
             subtitle_path = (task.get("subtitle_outputs") or {}).get(subtitle_format)
@@ -434,6 +449,8 @@ class PipelineService:
             raise RuntimeError("Task not found")
         if persisted.get("burn_status") == "processing" or persisted.get("dubbing_status") == "processing":
             raise RuntimeError("Previous task stage is still stopping or processing")
+        if translation_busy(task_id):
+            raise RuntimeError("Translation is still processing")
         loop = asyncio.get_running_loop()
         run = TaskRun(task_id, uuid4().hex)
         # A successful start response must never expose the previous terminal

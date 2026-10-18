@@ -9,6 +9,7 @@ from app.services.tts.registry import is_korean_language, resolve_tts_route
 from app.services.tts.voice_selection import resolve_available_voice
 from app.services.dubbing_service import dubbing_service, NATURAL_MAX_KOKORO_TEMPO, NATURAL_MAX_EDGE_TEMPO
 from app.services.video_output import VideoOutputOptions
+from app.services.translation_review_service import TranslationReviewService, translation_busy
 
 router = APIRouter()
 
@@ -26,6 +27,7 @@ class PipelineRequest(BaseModel):
     subtitle_style: dict = Field(default_factory=dict)
     force_translate: bool = False
     force_dub: bool = False
+    review_id: str | None = None
     output_options: VideoOutputOptions = Field(default_factory=VideoOutputOptions)
 
 
@@ -68,6 +70,10 @@ async def start_pipeline(request: PipelineRequest):
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
+        if pipeline_service.is_busy(request.task_id) or translation_busy(request.task_id):
+            raise RuntimeError("Pipeline already running")
+        if request.review_id and not request.force_translate:
+            TranslationReviewService(history_manager).approve(request.task_id, request.target_lang, request.review_id)
         pipeline_service.start(
             request.task_id,
             request.target_lang,

@@ -184,11 +184,9 @@ for (const ok of [true, false]) test(`old subtitle translation/export ${ok ? 'su
   assert.equal(translate.url, '/api/translate'); await h.settle();
   h.render(activeB()); await h.settle(); const before = snapshot(h);
   translate.respond({ detail: 'translation failed' }, ok); await h.settle();
-  if (ok) {
-    const exported = h.requests.at(-1); assert.equal(exported.url, '/api/export');
-    assert.equal(exported.options.body.get('task_id'), 'A');
-    exported.respond({});
-  }
+  // A newly generated translation pauses, even if its HTTP finishes after
+  // selection moved to B. It must never auto-export or auto-approve.
+  assert.equal(h.requests.filter(request => request.url === '/api/export').length, 0);
   await pending; await h.settle();
   assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
 });
@@ -197,6 +195,8 @@ for (const burnStatus of ['completed', 'failed']) test(`old burn polling ${burnS
   const h = await ready(task('A', { last_process_route: 'subtitles' }));
   h.view.setBurn(true); h.render();
   const pending = h.view.run(); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/translation-review');
+  h.requests.at(-1).respond({ approved: true }); await h.settle();
   assert.equal(h.requests.at(-1).url, '/api/export'); h.requests.at(-1).respond({}); await h.settle();
   assert.equal(h.requests.at(-1).url, '/api/burn');
   assert.equal(JSON.parse(h.requests.at(-1).options.body).task_id, 'A');
@@ -314,4 +314,95 @@ test('newer authoritative run can replace an old stopping display', async () => 
   h.event(next); h.render(next); await h.settle();
   assert.equal(h.view.status, 'processing'); assert.equal(h.view.cleanupWaiting, false);
   assert.equal(h.view.running, true);
+});
+
+const reviewTask = (extra = {}) => task('A', {
+  last_process_route: 'subtitles', status: 'awaiting_review', pipeline_status: 'awaiting_review', state_revision: 10,
+  translation_reviews: { Chinese: { review_id: 'review-1', status: 'pending' } }, ...extra,
+});
+
+test('reload restores review waiting without approving, exporting or starting a pipeline', async () => {
+  const h = await ready(reviewTask());
+  assert.equal(h.view.status, 'awaiting_review'); assert.equal(h.view.running, false);
+  assert.equal(h.view.message, 'translationReviewRequired'); assert.equal(h.view.currentStage, '');
+  assert.deepEqual([...h.view.completedStages], ['transcribe', 'translate']);
+  assert.equal(h.requests.length, 0);
+  h.changeLanguage(); await h.settle();
+  assert.equal(h.view.status, 'awaiting_review'); assert.equal(h.requests.length, 0);
+});
+
+test('new subtitle translation pauses without export or success notification', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles', translations: {} }));
+  const pending = h.view.run();
+  h.requests.at(-1).respond({ review_required: true, review: { review_id: 'fresh' }, state_revision: 15 });
+  await pending; await h.settle();
+  assert.equal(h.view.status, 'awaiting_review'); assert.equal(h.view.running, false);
+  assert.equal(h.requests.length, 1); assert.equal(h.toasts.length, 0);
+});
+
+test('continue uses the current review token and cannot double submit or retranslate', async () => {
+  const h = await ready(reviewTask());
+  const pending = h.view.run(); await h.settle();
+  const request = h.requests.at(-1);
+  assert.equal(request.url, '/api/tasks/A/translation-review');
+  assert.equal(JSON.parse(request.options.body).review_id, 'review-1');
+  await h.view.run(); assert.equal(h.requests.length, 1);
+  request.respond({ approved: true }); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/export');
+  h.requests.at(-1).respond({}); await pending; await h.settle();
+  assert.equal(h.view.status, 'completed');
+  assert.equal(h.requests.some(request => request.url === '/api/translate'), false);
+});
+
+test('edited review props replace the token before continuing', async () => {
+  const h = await ready(reviewTask());
+  h.render(reviewTask({ state_revision: 12, translation_reviews: { Chinese: { review_id: 'edited', status: 'pending' } } }));
+  await h.settle();
+  const pending = h.view.run();
+  await h.settle();
+  assert.equal(JSON.parse(h.requests.at(-1).options.body).review_id, 'edited');
+  h.requests.at(-1).respond({ detail: 'changed again' }, false, 409);
+  await pending; await h.settle();
+  assert.equal(h.requests.some(request => request.url === '/api/export'), false);
+});
+
+test('preparing a legacy cached translation does not silently approve it', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles' }));
+  const pending = h.view.run();
+  await h.settle();
+  assert.equal(JSON.parse(h.requests.at(-1).options.body).review_id, null);
+  h.requests.at(-1).respond({ approved: false, review: { review_id: 'legacy' } });
+  await pending; await h.settle();
+  assert.equal(h.view.status, 'awaiting_review'); assert.equal(h.requests.length, 1);
+});
+
+test('dubbing review event stops processing and next click sends the newest live token', async () => {
+  const h = await ready(reviewTask({ last_process_route: 'dubbing', state_revision: 10 }));
+  // Simulate the response of a newer generation before its HTTP detail refresh.
+  h.event({ status: 'awaiting_review', pipeline_status: 'awaiting_review', state_revision: 20,
+    translation_reviews: { Chinese: { review_id: 'live-review', status: 'pending' } } });
+  await h.settle();
+  assert.equal(h.view.running, false); assert.equal(h.view.status, 'awaiting_review');
+  const { pending, request } = await reachPipeline(h);
+  assert.equal(JSON.parse(request.options.body).review_id, 'live-review');
+  request.respond({ status: 'started' }); await pending; await h.settle();
+  assert.equal(h.view.running, true);
+});
+
+test('retranslation does not approve the previous token', async () => {
+  const h = await ready(reviewTask({ last_process_route: 'dubbing' }));
+  const pending = h.view.run({ forceTranslate: true, forceDub: true });
+  h.requests.at(-1).respond({ encoder: 'test' }); await h.settle();
+  const body = JSON.parse(h.requests.at(-1).options.body);
+  assert.equal(body.force_translate, true); assert.equal(body.review_id, null);
+  h.requests.at(-1).respond({ status: 'started' }); await pending;
+});
+
+test('late review failure for A cannot change B or show B an error', async () => {
+  const h = await ready(reviewTask());
+  const pending = h.view.run(); await h.settle();
+  const request = h.requests.at(-1);
+  h.render(activeB()); await h.settle(); const before = snapshot(h);
+  request.respond({ detail: 'old A changed' }, false, 409); await pending; await h.settle();
+  assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
 });

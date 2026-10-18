@@ -14,6 +14,11 @@ from app.core.task_run import current_task_run
 
 logger = logging.getLogger(__name__)
 
+
+def _next_revision(task: dict) -> int:
+    value = task.get("state_revision")
+    return (value if type(value) is int and value >= 0 else 0) + 1
+
 _history_locks: dict[str, threading.RLock] = {}
 _history_locks_guard = threading.Lock()
 
@@ -121,9 +126,31 @@ class HistoryManager:
                 if run and not run.accepts(task):
                     logger.debug("Ignored obsolete pipeline write for task %s", task_id)
                     return False
+                revision = _next_revision(task)
                 task.update(updates)
+                task["state_revision"] = revision
                 self._write_history(history)
-                return
+                return dict(task)
+
+    def record_run_event(self, task_id: str, data: Dict[str, Any]):
+        """Persist an owned event before assigning the version sent to clients."""
+        updates = {key: value for key, value in data.items() if key not in {"progress", "state_revision"}}
+        if "progress" in data:
+            updates["progress_percent"] = data["progress"]
+        return self.update_task(task_id, updates)
+
+    @_serialized
+    def finish_pipeline_cleanup(self, task_id: str, run_id: str):
+        """Only the matching retired run may unlock its pending cleanup."""
+        history = self._read_history()
+        for task in history:
+            if (task["task_id"] == task_id and task.get("pipeline_run_id") == run_id
+                    and task.get("pipeline_cleanup_pending") is True):
+                task.update({"status": "cancelled", "pipeline_status": "cancelled",
+                             "pipeline_cleanup_pending": False, "message": "流水线已取消"})
+                task["state_revision"] = _next_revision(task)
+                self._write_history(history)
+                return dict(task)
 
     def get_all_tasks(self) -> List[Dict[str, Any]]:
         return self._read_history()
@@ -159,6 +186,15 @@ class HistoryManager:
         now = datetime.now().isoformat()
 
         for task in history:
+            before = dict(task)
+            if task.get("pipeline_cleanup_pending") or task.get("pipeline_status") == "cancelling":
+                # No old process-local worker survives an application restart.
+                task.update({"status": "cancelled", "pipeline_status": "cancelled",
+                             "pipeline_cleanup_pending": False, "message": "流水线已取消"})
+                for stage in ("dubbing", "burn"):
+                    if task.get(f"{stage}_status") == "processing":
+                        task[f"{stage}_status"] = "cancelled"
+                recovered += 1
             status = task.get("status")
             pipeline_running = task.get("pipeline_status") == "processing"
             if pipeline_running or status in {
@@ -198,6 +234,9 @@ class HistoryManager:
                 task["dubbing_status"] = "failed"
                 task["dubbing_error"] = "配音因应用重启而中断，请重试。"
                 recovered += 1
+
+            if task != before:
+                task["state_revision"] = _next_revision(task)
 
         if recovered:
             self._write_history(history)

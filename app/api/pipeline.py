@@ -122,4 +122,5 @@ async def decide_compression(task_id: str, decision: CompressionDecision):
 async def cancel_pipeline(task_id: str):
     if not await pipeline_service.cancel(task_id):
         raise HTTPException(status_code=409, detail="Pipeline is not running")
-    return {"status": "cancelled", "task_id": task_id}
+    task = history_manager.get_task(task_id) or {}
+    return {"status": "cancelling" if task.get("pipeline_cleanup_pending") else "cancelled", "task_id": task_id}

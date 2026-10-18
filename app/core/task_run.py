@@ -30,7 +30,7 @@ def current_task_run(task_id: str) -> TaskRun | None:
 
 
 @contextmanager
-def task_run_scope(run: TaskRun):
+def task_run_scope(run: TaskRun | None):
     token = _current_run.set(run)
     try:
         yield

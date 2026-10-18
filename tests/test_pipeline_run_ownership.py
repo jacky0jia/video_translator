@@ -196,7 +196,8 @@ def test_cancelled_real_thread_cannot_publish_or_overlap_a_new_pipeline(owned_hi
             pending_workers = list(service._workers[task_id])
             assert await service.cancel(task_id)
             cancelled = history.get_task(task_id)
-            assert cancelled['pipeline_status'] == 'cancelled'
+            assert cancelled['pipeline_status'] == 'cancelling'
+            assert cancelled['pipeline_cleanup_pending'] is True
             assert cancelled[f'{stage}_status'] == 'cancelled'
             queued = queue.qsize()
             with pytest.raises(RuntimeError, match='still stopping'):
@@ -205,8 +206,14 @@ def test_cancelled_real_thread_cannot_publish_or_overlap_a_new_pipeline(owned_hi
             release.set()
             await asyncio.gather(*pending_workers, return_exceptions=True)
             await asyncio.sleep(0)  # deliver any thread-scheduled queue callbacks
-            assert history.get_task(task_id) == cancelled
-            assert queue.qsize() == queued
+            assert history.get_task(task_id) == {
+                **cancelled, 'status': 'cancelled', 'pipeline_status': 'cancelled',
+                'pipeline_cleanup_pending': False, 'message': '流水线已取消',
+                'state_revision': cancelled['state_revision'] + 1,
+            }
+            assert queue.qsize() == queued + 1  # only the controller's cleanup terminal
+            while not queue.empty():
+                assert queue.get_nowait().get('message') != 'late worker result'
             assert not service._workers
             service.run = AsyncMock()
             restarted = service.start(task_id, 'Chinese', 'voice')

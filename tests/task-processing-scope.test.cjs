@@ -267,3 +267,51 @@ test('language change during a pending start cannot restore old terminal state o
   plan.respond({ detail: 'invalid output' }, false); await pending; await h.settle();
   assert.equal(h.view.startPending, false); assert.equal(h.view.status, 'failed');
 });
+
+test('cancel request and persisted worker cleanup keep UI locked until final cancellation', async () => {
+  const h = await ready(activeB());
+  const pending = h.view.cancel(), request = h.requests.at(-1); await h.settle();
+  assert.equal(h.view.cancelPending, true);
+  const count = h.requests.length; await h.view.cancel(); assert.equal(h.requests.length, count);
+  const stopping = { ...activeB(), status: 'pipeline_cancelling', pipeline_status: 'cancelling', pipeline_cleanup_pending: true };
+  h.event(stopping); h.render(stopping); await h.settle();
+  assert.equal(h.view.status, 'cancelling'); assert.equal(h.view.running, true);
+  assert.equal(h.view.cleanupWaiting, true); assert.equal(h.view.message, 'pipelineStopping');
+  request.respond({ status: 'cancelling' }); await pending; await h.settle();
+  assert.equal(h.view.running, true); assert.equal(h.view.cancelPending, false);
+  const locked = h.requests.length; await h.view.run(); await h.view.cancel(); assert.equal(h.requests.length, locked);
+  h.event({ ...stopping, status: 'cancelled', pipeline_status: 'cancelled', pipeline_cleanup_pending: false });
+  h.render({ ...stopping, status: 'cancelled', pipeline_status: 'cancelled', pipeline_cleanup_pending: false }); await h.settle();
+  assert.equal(h.view.running, false); assert.equal(h.view.cleanupWaiting, false);
+});
+
+test('reloading a pending cleanup restores stopping status without any HTTP start', async () => {
+  const h = await ready(task('A', { pipeline_status: 'cancelling', pipeline_cleanup_pending: true, progress_percent: 57, cancelled_stage: 'pipeline_rendering' }));
+  assert.equal(h.view.status, 'cancelling'); assert.equal(h.view.progress, 57);
+  assert.equal(h.view.running, true); assert.equal(h.view.currentStage, 'render');
+  assert.equal(h.requests.length, 0);
+});
+
+test('language change cannot restore older props over a live cancellation', async () => {
+  const h = await ready({ ...activeB(), state_revision: 10 });
+  h.event({ ...activeB(), state_revision: 11, status: 'pipeline_cancelling', pipeline_status: 'cancelling', pipeline_cleanup_pending: true });
+  await h.settle(); h.changeLanguage(); await h.settle();
+  assert.equal(h.view.status, 'cancelling'); assert.equal(h.view.cleanupWaiting, true);
+  assert.equal(h.view.running, true);
+});
+
+test('language change preserves newer same-stage live progress', async () => {
+  const h = await ready({ ...activeB(), state_revision: 10 });
+  h.event({ ...activeB(), state_revision: 11, progress: 83 }); await h.settle();
+  h.changeLanguage(); await h.settle();
+  assert.equal(h.view.progress, 83); assert.equal(h.view.running, true);
+});
+
+test('newer authoritative run can replace an old stopping display', async () => {
+  const stopping = { ...activeB(), state_revision: 11, pipeline_status: 'cancelling', pipeline_cleanup_pending: true };
+  const h = await ready(stopping);
+  const next = { ...activeB(), state_revision: 12, pipeline_run_id: 'new', pipeline_cleanup_pending: false };
+  h.event(next); h.render(next); await h.settle();
+  assert.equal(h.view.status, 'processing'); assert.equal(h.view.cleanupWaiting, false);
+  assert.equal(h.view.running, true);
+});

@@ -10,7 +10,7 @@ from urllib.parse import unquote
 from uuid import uuid4
 
 from app.core.config import settings
-from app.core.events import emit_event
+from app.core.events import emit_event, task_event_snapshot
 from app.core.history import history_manager
 from app.core.task_run import TaskRun, current_task_run, task_run_scope
 
@@ -34,6 +34,20 @@ class PipelineService:
             not worker.done() for worker in self._workers.get(task_id, ())
         ))
 
+    def _finish_cleanup(self, task_id: str, run: TaskRun | None) -> None:
+        if not run or any(not worker.done() for worker in self._workers.get(task_id, ())):
+            return
+        try:
+            with run.lock:
+                state = history_manager.finish_pipeline_cleanup(task_id, run.run_id)
+                if state:
+                    # This is the controller's compare-and-set cleanup, not a
+                    # revoked worker regaining permission to write.
+                    with task_run_scope(None):
+                        emit_event(task_id, task_event_snapshot(state))
+        except Exception:
+            logger.exception("Unable to publish pipeline cleanup for %s", task_id)
+
     async def _run_thread_stage(self, task_id: str, function: Callable, *args) -> Any:
         # Cancelling an asyncio waiter does not stop a Python worker thread.
         # Keep its future alive and owned until the real function exits.
@@ -56,6 +70,7 @@ class PipelineService:
                 self._workers.pop(task_id, None)
             if not completed.cancelled():
                 completed.exception()  # retrieve a late exception after cancellation
+            self._finish_cleanup(task_id, run)
 
         worker.add_done_callback(finished)
         return await asyncio.shield(worker)
@@ -342,6 +357,11 @@ class PipelineService:
                     "status": "cancelled", "pipeline_status": "cancelled",
                     "message": "流水线已取消", "cancelled_stage": persisted.get("pipeline_stage"),
                 }
+                pending = any(not worker.done() for worker in self._workers.get(task_id, ()))
+                data["pipeline_cleanup_pending"] = pending
+                if pending:
+                    data.update({"status": "pipeline_cancelling", "pipeline_status": "cancelling",
+                                 "message": "已请求取消，正在等待后台工作线程退出，请稍候..."})
                 for stage in ("dubbing", "burn"):
                     if persisted.get(f"{stage}_status") == "processing":
                         data[f"{stage}_status"] = "cancelled"
@@ -424,11 +444,14 @@ class PipelineService:
             "message": "正在启动流水线...", "progress_percent": 0,
             "failed_stage": None, "cancelled_stage": None,
             "pipeline_run_id": run.run_id,
+            "pipeline_cleanup_pending": False,
             "last_process_route": "dubbing", "last_subtitle_format": subtitle_format.lower(),
             "dubbing_burn_subtitles": burn_subtitles, "last_end_note_enabled": end_note_enabled,
             "video_output_options": dict(output_options or {}),
         }
-        history_manager.update_task(task_id, starting)
+        state = history_manager.update_task(task_id, starting)
+        if isinstance(state, dict):
+            starting["state_revision"] = state["state_revision"]
         task = loop.create_task(
             self._run_owned(
                 run,

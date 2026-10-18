@@ -15,10 +15,13 @@ function harness() {
     message(value) { this.onmessage({ data: JSON.stringify(value) }); }
   }
   const mod = { exports: {} };
+  const versions = { exports: {} };
+  vm.runInNewContext(esbuild.transformSync(fs.readFileSync(path.resolve(__dirname, '../app/frontend/src/utils/taskStateVersion.js'), 'utf8'), { format: 'cjs' }).code,
+    { module: versions, exports: versions.exports });
   const source = fs.readFileSync(path.resolve(__dirname, '../app/frontend/src/hooks/useTaskSSE.js'), 'utf8');
   vm.runInNewContext(esbuild.transformSync(source, { format: 'cjs' }).code, {
     module: mod, exports: mod.exports, EventSource: Stream,
-    require: () => ({ useRef: () => ref, useEffect: effect => effects.push(effect) }),
+    require: name => name === 'react' ? { useRef: () => ref, useEffect: effect => effects.push(effect) } : versions.exports,
     setTimeout: callback => { const id = Symbol(); timers.set(id, callback); return id; },
     clearTimeout: id => timers.delete(id),
   });
@@ -94,4 +97,21 @@ test('not_found and unmount clear retry timers and do not reconnect', () => {
   next.onerror();
   finish();
   assert.equal(h.timers.size, 0);
+});
+
+test('older progress cannot undo a newer snapshot, including after reconnect', () => {
+  const h = harness(), received = [];
+  h.hook('A', event => received.push(event.state_revision), 10);
+  const cleanup = h.effects.pop()(), old = h.connections[0];
+  old.message({ status: 'dubbing', state_revision: 9 });
+  old.message({ status: 'dubbing', state_revision: 12 });
+  old.message({ status: 'dubbing', state_revision: 11 });
+  old.onerror();
+  const [id, reconnect] = [...h.timers][0]; h.timers.delete(id); reconnect();
+  const current = h.connections[1];
+  current.message({ status: 'dubbing', state_revision: 10 });
+  current.message({ status: 'pipeline_cancelling', state_revision: 13 });
+  current.message({ status: 'completed', state_revision: 12 });
+  assert.deepEqual(received, [12, 13]);
+  cleanup();
 });

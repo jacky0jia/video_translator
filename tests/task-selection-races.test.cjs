@@ -34,11 +34,13 @@ function harness() {
     return mod.exports;
   }
   const scope = compile(path.join(root, 'utils/taskRequestScope.js'));
+  const versions = compile(path.join(root, 'utils/taskStateVersion.js'));
   const toast = (...args) => toasts.push(args);
   const App = compile(path.join(root, 'App.jsx'), name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
     if (name.includes('taskRequestScope')) return scope;
+    if (name.includes('taskStateVersion')) return versions;
     if (name.includes('useTaskSSE')) return { useTaskSSE: (id, callback) => { stream = { id, callback }; } };
     if (name.includes('ToastContext')) return { useToast: () => toast };
     if (name.includes('I18nContext')) return { useI18n: () => ({ t: key => key, lang: 'en' }) };
@@ -55,7 +57,7 @@ function harness() {
     }
   }
   render();
-  return { render, props, requests, toasts, event: data => stream.callback(data) };
+  return { render, props, requests, toasts, versions, event: data => stream.callback(data) };
 }
 const task = (id, status = 'transcribed') => ({ task_id: id, filename: `${id}.mp4`, status, transcription_path: `${id}.json` });
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -196,6 +198,21 @@ test('initial upload event cannot discard the only detail load', async () => {
   h.requests.at(-1).respond({ tasks: [task('new')] }); await flush(); h.render();
   assert.equal(h.props('ControlPanel').task.task_id, 'new');
   assert.equal(h.props('ControlPanel').task.transcription_path, 'new.json');
+});
+
+test('HTTP detail captured before a newer live state cannot overwrite that state', async () => {
+  const h = harness(); await seed(h); await select(h, 'A');
+  const pending = h.props('ControlPanel').onTaskRefresh('A');
+  const list = h.requests.at(-2), detail = h.requests.at(-1);
+  // The processing panel's SSE shares the same version clock as App.
+  h.versions.acceptTaskState('A', { state_revision: 20 });
+  detail.respond({ task: { ...task('A', 'failed'), state_revision: 19 } });
+  list.respond({ tasks: [task('A')] }); await pending; h.render();
+  assert.notEqual(h.props('ControlPanel').task.status, 'failed');
+  const current = h.props('ControlPanel').onTaskRefresh('A');
+  h.requests.at(-2).respond({ tasks: [task('A')] });
+  h.requests.at(-1).respond({ task: { ...task('A', 'completed'), state_revision: 20 } });
+  await current; h.render(); assert.equal(h.props('ControlPanel').task.status, 'completed');
 });
 
 if (harness().props('HistoryList').onCancelImport) {

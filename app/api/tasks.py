@@ -14,18 +14,14 @@ from app.services.video_output import VideoOutputOptions, make_output_plan
 
 from app.core.config import settings
 from app.core.history import history_manager
-from app.core.events import event_generator, emit_event
+from app.core.events import event_generator, emit_event, TASK_EVENT_FIELDS
 from app.core.file_security import contained_file
 from app.services.pipeline_service import pipeline_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_TASK_EVENT_FIELDS = (
-    "status", "message", "progress_percent", "pipeline_status", "pipeline_stage",
-    "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
-    "burn_error", "video_codec", "video_encoder", "pipeline_run_id",
-)
+_TASK_EVENT_FIELDS = TASK_EVENT_FIELDS
 
 
 def _task_event_snapshot(task: dict) -> dict:

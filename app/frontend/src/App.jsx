@@ -11,11 +11,12 @@ import { useToast } from './contexts/ToastContext';
 import { useI18n } from './contexts/I18nContext';
 import { useTheme } from './contexts/ThemeContext';
 import { createTaskRequestScope } from './utils/taskRequestScope';
+import { acceptTaskState, olderTaskState } from './utils/taskStateVersion';
 
 const ACTIVE_STATUSES = new Set([
   'pending', 'extracting_audio', 'waiting_for_gpu', 'switching_model', 'transcribing',
   'translating', 'pipeline_starting', 'pipeline_transcribing', 'pipeline_translating', 'pipeline_translated',
-  'pipeline_dubbing', 'burning', 'dubbing',
+  'pipeline_dubbing', 'pipeline_cancelling', 'burning', 'dubbing',
 ]);
 
 function StatusDot({ status }) {
@@ -56,7 +57,10 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || 'Unable to load tasks');
       if (!requestScope.current.acceptsList(ticket)) return;
       const next = (data.tasks || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      setTasks(next);
+      setTasks(previous => next.map(item => {
+        const prior = previous.find(old => old.task_id === item.task_id);
+        return olderTaskState(item, prior) ? prior : item;
+      }));
     } catch (error) {
       console.error('Failed to fetch tasks', error);
     }
@@ -71,6 +75,7 @@ export default function App() {
       if (!requestScope.current.acceptsDetail(ticket)) return;
       if (!response.ok) throw new Error(data.detail || 'Unable to load task');
       if (data.task?.task_id !== taskId) throw new Error('Unable to load task');
+      if (!acceptTaskState(taskId, data.task)) return;
       setCurrentTask(data.task);
       if (resetVisibility) setShowSource(Boolean(data.task.transcription_path));
     } catch (error) {
@@ -104,7 +109,7 @@ export default function App() {
       setListeningTaskId(null);
       refreshTask(listeningTaskId);
     }
-  });
+  }, currentTask?.task_id === listeningTaskId ? currentTask?.state_revision : undefined);
 
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
 

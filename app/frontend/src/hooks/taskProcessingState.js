@@ -1,7 +1,7 @@
 export const ACTIVE_TASK_STATUSES = new Set([
   'pending', 'extracting_audio', 'waiting_for_gpu', 'switching_model', 'transcribing',
   'translating', 'pipeline_transcribing', 'pipeline_translating', 'pipeline_translated',
-  'pipeline_dubbing', 'burning', 'dubbing',
+  'pipeline_dubbing', 'pipeline_cancelling', 'burning', 'dubbing',
 ]);
 
 export const STANDALONE_TRANSCRIPTION_STATUSES = new Set([
@@ -26,7 +26,7 @@ export function stageIdForEvent(event, currentStage = '') {
 
 export function isStandaloneTranscriptionEvent(event) {
   if (!STANDALONE_TRANSCRIPTION_STATUSES.has(event?.status)) return false;
-  if (event?.pipeline_status === 'processing'
+  if (event?.pipeline_cleanup_pending || event?.pipeline_status === 'cancelling' || event?.pipeline_status === 'processing'
     || String(event?.pipeline_stage || '').startsWith('pipeline_')) return false;
   const stage = stageId(event?.gpu_stage);
   return !stage || stage === 'transcribe';
@@ -174,6 +174,11 @@ export function standaloneTranscriptionCompletion(event, t = value => value) {
 
 export function deriveTaskProcessingState(task, t = value => value) {
   const persistedStatus = task?.status || '';
+  if (task?.pipeline_cleanup_pending || task?.pipeline_status === 'cancelling') {
+    return { running: true, status: 'cancelling',
+      progress: Math.max(0, Math.min(100, Number(task?.progress_percent) || 0)),
+      currentStage: stageId(task?.cancelled_stage || task?.pipeline_stage), message: t('pipelineStopping') };
+  }
   const standaloneBurnRunning = task?.burn_status === 'processing' && task?.pipeline_status !== 'processing';
   const persistedStage = standaloneBurnRunning
     ? 'burning' : task?.pipeline_stage || task?.gpu_stage || persistedStatus;

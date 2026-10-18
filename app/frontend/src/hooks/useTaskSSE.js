@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
+import { acceptTaskState } from '../utils/taskStateVersion';
 
-export function useTaskSSE(taskId, onEvent) {
+export function useTaskSSE(taskId, onEvent, knownRevision) {
   const onEventRef = useRef({ taskId, onEvent });
   onEventRef.current = { taskId, onEvent };
+  acceptTaskState(taskId, { state_revision: knownRevision });
 
   useEffect(() => {
     if (!taskId) return;
@@ -19,6 +21,7 @@ export function useTaskSSE(taskId, onEvent) {
         if (!isCurrent()) return;
         try {
           const data = JSON.parse(e.data);
+          if (!acceptTaskState(taskId, data)) return;
           onEventRef.current.onEvent?.(data);
         } catch {
           // ignore parse errors

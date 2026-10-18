@@ -9,6 +9,27 @@ from app.core.task_run import current_task_run
 
 logger = logging.getLogger(__name__)
 
+TASK_EVENT_FIELDS = (
+    "status", "message", "progress_percent", "pipeline_status", "pipeline_stage",
+    "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
+    "burn_error", "video_codec", "video_encoder", "pipeline_run_id",
+    "pipeline_cleanup_pending", "state_revision",
+)
+
+
+def task_event_snapshot(task: dict) -> dict:
+    return {key: task.get(key) for key in TASK_EVENT_FIELDS}
+
+
+def _revision(data: dict):
+    value = data.get("state_revision")
+    return value if type(value) is int and value >= 0 else None
+
+
+def _active(data: dict) -> bool:
+    return bool(data.get("pipeline_cleanup_pending") or data.get("pipeline_status") == "cancelling"
+                or any(data.get(key) == "processing" for key in ("pipeline_status", "dubbing_status", "burn_status")))
+
 # Each SSE connection needs its own queue; a shared queue distributes events
 # between listeners instead of broadcasting them.
 _task_queues: Dict[str, Dict[asyncio.Queue, asyncio.AbstractEventLoop]] = {}
@@ -60,7 +81,9 @@ def emit_event(task_id: str, data: Dict[str, Any]) -> None:
         with run.lock:
             if not run.accepts(history_manager.get_task(task_id)):
                 return
-            _emit_event(task_id, {**data, "pipeline_run_id": run.run_id})
+            persisted = history_manager.record_run_event(task_id, {**data, "pipeline_run_id": run.run_id})
+            if persisted:
+                _emit_event(task_id, {**data, **task_event_snapshot(persisted)})
         return
     _emit_event(task_id, data)
 
@@ -91,6 +114,7 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
     Closes automatically when terminal status is received.
     """
     queue = _get_queue(task_id)
+    last_revision = None
 
     try:
         # Read only after registering the queue: a completion between the HTTP
@@ -100,6 +124,7 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
             yield 'event: not_found\ndata: {"detail":"Task not found"}\n\n'
             return
         if snapshot:
+            last_revision = _revision(snapshot)
             yield f"data: {json.dumps(_browser_event(snapshot))}\n\n"
         while True:
             # Wait for next event with a timeout to keep connection alive
@@ -113,10 +138,12 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
                     if snapshot is None:
                         yield 'event: not_found\ndata: {"detail":"Task not found"}\n\n'
                         return
+                    version = _revision(snapshot)
+                    if version is not None and last_revision is not None and version < last_revision:
+                        continue
+                    last_revision = version if version is not None else last_revision
                     yield f"data: {json.dumps(_browser_event(snapshot))}\n\n"
-                    active = any(snapshot.get(key) == "processing" for key in
-                                 ("pipeline_status", "dubbing_status", "burn_status"))
-                    if not active and snapshot.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled"):
+                    if not _active(snapshot) and snapshot.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled"):
                         return
                 else:
                     yield ":ping\n\n"
@@ -131,10 +158,17 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
                 # stream for the new run, even if it was emitted before restart.
                 if data["pipeline_run_id"] != current.get("pipeline_run_id"):
                     continue
+                current_version, version = _revision(current), _revision(data)
+                if current_version is not None and version is not None and current_version > version:
+                    data = current
+            version = _revision(data)
+            if version is not None and last_revision is not None and version <= last_revision:
+                continue
+            last_revision = version if version is not None else last_revision
             yield f"data: {json.dumps(_browser_event(data))}\n\n"
 
             # Terminal statuses — close the stream
-            if data.get("status") in ("transcribed", "completed", "failed", "cancelled"):
+            if not _active(data) and data.get("status") in ("transcribed", "completed", "failed", "translation_failed", "cancelled"):
                 break
     except asyncio.CancelledError:
         # Normal shutdown, don't propagate to ASGI

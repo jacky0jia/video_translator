@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import UploadForm from './components/UploadForm';
 import HistoryList from './components/HistoryList';
 import VideoPreview from './components/VideoPreview';
@@ -10,6 +10,7 @@ import { useTaskSSE } from './hooks/useTaskSSE';
 import { useToast } from './contexts/ToastContext';
 import { useI18n } from './contexts/I18nContext';
 import { useTheme } from './contexts/ThemeContext';
+import { createTaskRequestScope } from './utils/taskRequestScope';
 
 const ACTIVE_STATUSES = new Set([
   'pending', 'extracting_audio', 'waiting_for_gpu', 'switching_model', 'transcribing',
@@ -43,43 +44,60 @@ export default function App() {
   const [subtitleStyle, setSubtitleStyle] = useState({ offsetY: 0, fontSize: 18, sourceColor: '#FFFFFF', targetColor: '#FDE047', bold: false, fontFamily: 'Arial' });
   const [showSource, setShowSource] = useState(true);
   const [showTarget, setShowTarget] = useState(true);
+  const requestScope = useRef(null);
+  if (!requestScope.current) requestScope.current = createTaskRequestScope();
+  const uploadPlaceholder = useRef(null);
 
   const fetchTasks = useCallback(async () => {
+    const ticket = requestScope.current.beginList();
     try {
       const response = await fetch('/api/tasks');
       const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Unable to load tasks');
+      if (!requestScope.current.acceptsList(ticket)) return;
       const next = (data.tasks || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       setTasks(next);
-      setCurrentTask(previous => {
-        if (!previous) return previous;
-        return next.find(item => item.task_id === previous.task_id) || previous;
-      });
     } catch (error) {
       console.error('Failed to fetch tasks', error);
     }
   }, []);
 
-  const loadTask = useCallback(async taskId => {
+  const readSelectedTask = useCallback(async (taskId, resetVisibility = false) => {
+    const ticket = requestScope.current.beginDetail(taskId);
+    if (!ticket) return;
     try {
-      const response = await fetch(`/api/tasks/${taskId}`);
+      const response = await fetch(`/api/tasks/${taskId}`, { cache: 'no-store' });
       const data = await response.json();
+      if (!requestScope.current.acceptsDetail(ticket)) return;
       if (!response.ok) throw new Error(data.detail || 'Unable to load task');
+      if (data.task?.task_id !== taskId) throw new Error('Unable to load task');
       setCurrentTask(data.task);
-      setHighlightTaskId(null);
-      setShowSource(Boolean(data.task?.transcription_path));
-      setShowTarget(true);
-      setMobilePage('preview');
+      if (resetVisibility) setShowSource(Boolean(data.task.transcription_path));
     } catch (error) {
-      showToast(error.message, 'error');
+      if (requestScope.current.acceptsDetail(ticket)) showToast(error.message, 'error');
     }
   }, [showToast]);
 
+  const loadTask = useCallback(async taskId => {
+    requestScope.current.select(taskId);
+    const cached = tasks.find(item => item.task_id === taskId) || null;
+    setCurrentTask(cached);
+    setHighlightTaskId(null);
+    setShowSource(Boolean(cached?.transcription_path));
+    setShowTarget(true);
+    setMobilePage('preview');
+    await readSelectedTask(taskId, true);
+  }, [tasks, readSelectedTask]);
+
   const refreshTask = useCallback(async taskId => {
-    await fetchTasks();
-    if (taskId) await loadTask(taskId);
-  }, [fetchTasks, loadTask]);
+    // A background completion must never navigate to its originating task.
+    await Promise.all([fetchTasks(), readSelectedTask(taskId)]);
+  }, [fetchTasks, readSelectedTask]);
 
   useTaskSSE(listeningTaskId, event => {
+    requestScope.current.invalidateList();
+    // Keep the first detail load alive when upload completion has no cached task.
+    if (currentTask?.task_id === listeningTaskId && requestScope.current.selectedId() === listeningTaskId) requestScope.current.invalidateDetail();
     setTasks(previous => previous.map(item => item.task_id === listeningTaskId ? { ...item, ...event } : item));
     setCurrentTask(previous => previous?.task_id === listeningTaskId ? { ...previous, ...event } : previous);
     if (['transcribed', 'completed', 'failed', 'translation_failed', 'cancelled'].includes(event.status)) {
@@ -99,7 +117,7 @@ export default function App() {
     }
     setListeningTaskId(taskId);
     setHighlightTaskId(taskId);
-    await fetchTasks();
+    await refreshTask(taskId);
   };
 
   const pageVisible = page => mobilePage === page ? 'block' : 'hidden lg:block';
@@ -130,10 +148,25 @@ export default function App() {
               <UploadForm onUploadStart={(filename, targetLang) => {
                 const placeholder = { task_id: `pending-${Date.now()}`, filename, target_lang: targetLang, status: 'uploading', progress_percent: 0, created_at: new Date().toISOString() };
                 setTasks(previous => [placeholder, ...previous]);
+                requestScope.current.invalidateList();
+                requestScope.current.select(placeholder.task_id);
+                uploadPlaceholder.current = placeholder.task_id;
                 setCurrentTask(placeholder);
                 setHighlightTaskId(placeholder.task_id);
-              }} onUpload={taskId => { setListeningTaskId(taskId); setHighlightTaskId(taskId); fetchTasks().then(() => loadTask(taskId)); }} />
-              <HistoryList tasks={tasks} onSelect={loadTask} onRefresh={fetchTasks} onRetry={retryTask} onDelete={ids => { setTasks(previous => previous.filter(item => !ids.includes(item.task_id))); if (ids.includes(currentTask?.task_id)) setCurrentTask(null); }} onDeleteAll={() => { setTasks([]); setCurrentTask(null); }} highlightTaskId={highlightTaskId} selectedTaskId={currentTask?.task_id} />
+              }} onUpload={taskId => {
+                setListeningTaskId(taskId); setHighlightTaskId(taskId);
+                if (requestScope.current.selectedId() === uploadPlaceholder.current) loadTask(taskId);
+                fetchTasks();
+              }} />
+              <HistoryList tasks={tasks} onSelect={loadTask} onRefresh={() => refreshTask(requestScope.current.selectedId())} onRetry={retryTask} onDelete={ids => {
+                requestScope.current.invalidateList();
+                setTasks(previous => previous.filter(item => !ids.includes(item.task_id)));
+                if (ids.includes(requestScope.current.selectedId())) { requestScope.current.select(null); setCurrentTask(null); }
+                if (ids.includes(listeningTaskId)) setListeningTaskId(null);
+              }} onDeleteAll={() => {
+                requestScope.current.invalidateList(); requestScope.current.select(null);
+                setTasks([]); setCurrentTask(null); setListeningTaskId(null);
+              }} highlightTaskId={highlightTaskId} selectedTaskId={currentTask?.task_id} />
             </aside>
 
             <section data-page="preview" className={`${pageVisible('preview')} min-w-0`}><VideoPreview task={currentTask} subtitleStyle={subtitleStyle} onSubtitleStyleChange={setSubtitleStyle} showSource={showSource} showTarget={showTarget} onShowSourceChange={setShowSource} onShowTargetChange={setShowTarget} onTaskRefresh={refreshTask} /></section>

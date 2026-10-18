@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
+from app.core.task_run import current_task_run
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +104,23 @@ class HistoryManager:
         self._write_history(history)
         return task_id
 
-    @_serialized
     def update_task(self, task_id: str, updates: Dict[str, Any]):
         """Updates a specific task by id."""
+        run = current_task_run(task_id)
+        if run:
+            # Always acquire run -> history, including terminal publication.
+            with run.lock:
+                return self._update_task(task_id, updates, run)
+        return self._update_task(task_id, updates)
+
+    @_serialized
+    def _update_task(self, task_id: str, updates: Dict[str, Any], run=None):
         history = self._read_history()
         for task in history:
             if task["task_id"] == task_id:
+                if run and not run.accepts(task):
+                    logger.debug("Ignored obsolete pipeline write for task %s", task_id)
+                    return False
                 task.update(updates)
                 self._write_history(history)
                 return

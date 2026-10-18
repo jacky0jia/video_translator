@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse
 
 from app.core.config import settings
 from app.core.history import history_manager
+from app.core.task_run import current_task_run
+from app.services.pipeline_service import pipeline_service
 from app.core.events import emit_event
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.core.file_security import validate_file_component
@@ -66,6 +68,8 @@ async def translate_transcription(
     Translates an existing transcription JSON file using LLM with sliding window.
     If task_id is provided, resolves the real file path from history manager.
     """
+    if task_id and not current_task_run(task_id) and pipeline_service.is_busy(task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     validate_file_component(target_lang, 'target language')
     if task_id:
         validate_file_component(task_id, 'task ID')
@@ -233,6 +237,8 @@ async def export_subtitles(
     extra_json_paths: comma-separated list of additional translation JSON paths for multilingual export
     Returns the file as a downloadable response.
     """
+    if task_id and not current_task_run(task_id) and pipeline_service.is_busy(task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     task = None
     if task_id:
         task = history_manager.get_task(task_id)

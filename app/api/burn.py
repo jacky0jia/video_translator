@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.core.history import history_manager
 from app.core.events import emit_event
 from app.services.video_burn_service import video_burn_service
+from app.services.pipeline_service import pipeline_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -43,6 +44,8 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if pipeline_service.is_busy(request.task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     video_path = task.get("upload_path") or task.get("source_path")
     if not video_path:
         raise HTTPException(status_code=400, detail="Source video path not found")

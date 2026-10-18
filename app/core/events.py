@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 
 from app.core.config import settings
+from app.core.task_run import current_task_run
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,18 @@ def _deliver(queue: asyncio.Queue, task_id: str, data: Dict[str, Any]) -> None:
 
 def emit_event(task_id: str, data: Dict[str, Any]) -> None:
     """Push an event into the task's SSE queue."""
+    run = current_task_run(task_id)
+    if run:
+        from app.core.history import history_manager
+        with run.lock:
+            if not run.accepts(history_manager.get_task(task_id)):
+                return
+            _emit_event(task_id, {**data, "pipeline_run_id": run.run_id})
+        return
+    _emit_event(task_id, data)
+
+
+def _emit_event(task_id: str, data: Dict[str, Any]) -> None:
     # Task state is persisted separately. Do not create an orphan queue when
     # nobody is listening: long dubbing jobs can emit hundreds of events and
     # would otherwise fill a queue that can never be drained.
@@ -109,6 +122,15 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
                     yield ":ping\n\n"
                 continue
 
+            if snapshot_loader and data.get("pipeline_run_id"):
+                current = snapshot_loader()
+                if current is None:
+                    yield 'event: not_found\ndata: {"detail":"Task not found"}\n\n'
+                    return
+                # A queued terminal event from an older run must not close the
+                # stream for the new run, even if it was emitted before restart.
+                if data["pipeline_run_id"] != current.get("pipeline_run_id"):
+                    continue
             yield f"data: {json.dumps(_browser_event(data))}\n\n"
 
             # Terminal statuses — close the stream

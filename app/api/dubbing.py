@@ -12,6 +12,7 @@ from app.core.file_security import AUDIO_EXTENSIONS, MAX_CLONE_BYTES, save_uploa
 from app.core.history import history_manager
 from app.services.dubbing_service import dubbing_service
 from app.services.dubbing_service import _is_kokoro_mode
+from app.services.pipeline_service import pipeline_service
 from app.services.tts.registry import is_korean_language, resolve_tts_route
 from app.services.tts.voice_selection import resolve_available_voice
 
@@ -58,6 +59,8 @@ async def start_dubbing(request: DubbingRequest, background_tasks: BackgroundTas
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if pipeline_service.is_busy(request.task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     video_path = task.get("upload_path") or task.get("source_path")
     if not video_path:
         raise HTTPException(status_code=400, detail="Source video path not found")
@@ -112,6 +115,9 @@ async def start_dubbing(request: DubbingRequest, background_tasks: BackgroundTas
             logger.warning("Voice selection failed for %s: %s", route.provider_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # Voice discovery above may yield to a simultaneous pipeline start.
+    if pipeline_service.is_busy(request.task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     background_tasks.add_task(
         _run_dubbing_task,
         request.task_id,

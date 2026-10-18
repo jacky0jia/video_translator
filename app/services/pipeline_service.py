@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import unquote
+from uuid import uuid4
 
 from app.core.config import settings
 from app.core.events import emit_event
 from app.core.history import history_manager
+from app.core.task_run import TaskRun, current_task_run, task_run_scope
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,51 @@ class PipelineService:
         self._dub_stage = dub_stage
         self._burn_stage = burn_stage
         self._tasks: dict[str, asyncio.Task] = {}
+        self._workers: dict[str, set[asyncio.Task]] = {}
+        self._runs: dict[str, TaskRun] = {}
+
+    def is_busy(self, task_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        return bool((task and not task.done()) or any(
+            not worker.done() for worker in self._workers.get(task_id, ())
+        ))
+
+    async def _run_thread_stage(self, task_id: str, function: Callable, *args) -> Any:
+        # Cancelling an asyncio waiter does not stop a Python worker thread.
+        # Keep its future alive and owned until the real function exits.
+        run = current_task_run(task_id)
+
+        def invoke():
+            if run:
+                with run.lock:
+                    if not run.active:
+                        raise RuntimeError("Pipeline stage was cancelled before the worker started")
+            return function(*args)
+
+        worker = asyncio.create_task(asyncio.to_thread(invoke))
+        workers = self._workers.setdefault(task_id, set())
+        workers.add(worker)
+
+        def finished(completed):
+            workers.discard(completed)
+            if not workers and self._workers.get(task_id) is workers:
+                self._workers.pop(task_id, None)
+            if not completed.cancelled():
+                completed.exception()  # retrieve a late exception after cancellation
+
+        worker.add_done_callback(finished)
+        return await asyncio.shield(worker)
+
+    async def _run_owned(self, run: TaskRun, *args) -> None:
+        with task_run_scope(run):
+            run.started = True
+            try:
+                await self.run(run.task_id, *args)
+            finally:
+                with run.lock:
+                    run.active = False
+                if self._tasks.get(run.task_id) is asyncio.current_task():
+                    self._tasks.pop(run.task_id, None)
 
     def _set_stage(self, task_id: str, stage: str, message: str, progress: int) -> None:
         data = {
@@ -126,7 +174,7 @@ class PipelineService:
 
     async def _default_dub(self, task_id: str, target_lang: str, voice: str, speed: float) -> None:
         from app.services.dubbing_service import dubbing_service
-        await asyncio.to_thread(dubbing_service.dub, task_id, target_lang, voice, speed, None)
+        await self._run_thread_stage(task_id, dubbing_service.dub, task_id, target_lang, voice, speed, None)
 
     async def _compress_translation(self, task_id: str, target_lang: str) -> None:
         import json
@@ -171,7 +219,8 @@ class PipelineService:
         output_options: dict | None = None,
     ) -> None:
         from app.services.video_burn_service import video_burn_service
-        await asyncio.to_thread(
+        await self._run_thread_stage(
+            task_id,
             video_burn_service.burn,
             task_id,
             show_source,
@@ -284,12 +333,23 @@ class PipelineService:
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)
         except asyncio.CancelledError:
-            data = {
-                "status": "cancelled", "pipeline_status": "cancelled",
-                "message": "流水线已取消", "cancelled_stage": (history_manager.get_task(task_id) or {}).get("pipeline_stage"),
-            }
-            history_manager.update_task(task_id, data)
-            emit_event(task_id, data)
+            run = current_task_run(task_id)
+            # Publish cancellation and close the write lease under one lock;
+            # no retiring worker can publish a later success/failure/progress.
+            with run.lock if run else nullcontext():
+                persisted = history_manager.get_task(task_id) or {}
+                data = {
+                    "status": "cancelled", "pipeline_status": "cancelled",
+                    "message": "流水线已取消", "cancelled_stage": persisted.get("pipeline_stage"),
+                }
+                for stage in ("dubbing", "burn"):
+                    if persisted.get(f"{stage}_status") == "processing":
+                        data[f"{stage}_status"] = "cancelled"
+                        data[f"{stage}_error"] = "流水线已取消"
+                history_manager.update_task(task_id, data)
+                emit_event(task_id, data)
+                if run:
+                    run.active = False
             raise
         except Exception as exc:
             from app.services.dubbing_service import DubbingCompressionRequired
@@ -324,7 +384,8 @@ class PipelineService:
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)
         finally:
-            self._tasks.pop(task_id, None)
+            if self._tasks.get(task_id) is asyncio.current_task():
+                self._tasks.pop(task_id, None)
 
     def start(
         self,
@@ -346,7 +407,15 @@ class PipelineService:
         current = self._tasks.get(task_id)
         if current and not current.done():
             raise RuntimeError("Pipeline already running")
+        if any(not worker.done() for worker in self._workers.get(task_id, ())):
+            raise RuntimeError("Previous pipeline stage is still stopping; retry after it finishes")
+        persisted = history_manager.get_task(task_id)
+        if not persisted:
+            raise RuntimeError("Task not found")
+        if persisted.get("burn_status") == "processing" or persisted.get("dubbing_status") == "processing":
+            raise RuntimeError("Previous task stage is still stopping or processing")
         loop = asyncio.get_running_loop()
+        run = TaskRun(task_id, uuid4().hex)
         # A successful start response must never expose the previous terminal
         # snapshot, even before the scheduled coroutine gets its first turn.
         starting = {
@@ -354,11 +423,15 @@ class PipelineService:
             "pipeline_stage": None, "gpu_stage": None,
             "message": "正在启动流水线...", "progress_percent": 0,
             "failed_stage": None, "cancelled_stage": None,
+            "pipeline_run_id": run.run_id,
+            "last_process_route": "dubbing", "last_subtitle_format": subtitle_format.lower(),
+            "dubbing_burn_subtitles": burn_subtitles, "last_end_note_enabled": end_note_enabled,
+            "video_output_options": dict(output_options or {}),
         }
         history_manager.update_task(task_id, starting)
         task = loop.create_task(
-            self.run(
-                task_id,
+            self._run_owned(
+                run,
                 target_lang,
                 voice,
                 speed,
@@ -376,6 +449,17 @@ class PipelineService:
             name=f"pipeline-{task_id}",
         )
         self._tasks[task_id] = task
+        self._runs[task_id] = run
+
+        def finished(completed):
+            with run.lock:
+                run.active = False
+            if self._tasks.get(task_id) is completed:
+                self._tasks.pop(task_id, None)
+            if self._runs.get(task_id) is run:
+                self._runs.pop(task_id, None)
+
+        task.add_done_callback(finished)
         emit_event(task_id, starting)
         return task
 
@@ -385,6 +469,16 @@ class PipelineService:
             return False
         from app.services.dubbing_service import dubbing_service
         dubbing_was_active = dubbing_service.request_cancel(task_id)
+        run = self._runs.get(task_id)
+        if run and not run.started:
+            # A task cancelled before its first turn never enters run()'s
+            # CancelledError handler, so publish and revoke it here.
+            with task_run_scope(run), run.lock:
+                data = {"status": "cancelled", "pipeline_status": "cancelled",
+                        "message": "流水线已取消", "cancelled_stage": None}
+                history_manager.update_task(task_id, data)
+                emit_event(task_id, data)
+                run.active = False
         task.cancel()
         try:
             await task

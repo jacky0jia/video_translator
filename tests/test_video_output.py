@@ -151,7 +151,7 @@ class VideoOutputTests(unittest.TestCase):
 
 
 class VideoPlanApiTests(unittest.IsolatedAsyncioTestCase):
-    async def test_start_pipeline_persists_and_forwards_choices(self):
+    async def test_start_pipeline_forwards_choices_without_premature_persistence(self):
         request = PipelineRequest(task_id='one', output_options={'policy': 'codec'}, voice='voice')
         with (patch('app.api.pipeline.history_manager') as history,
               patch('app.api.pipeline.pipeline_service.start') as start,
@@ -160,8 +160,8 @@ class VideoPlanApiTests(unittest.IsolatedAsyncioTestCase):
             history.get_task.return_value = {'task_id': 'one'}
             await start_pipeline(request)
             self.assertEqual(start.call_args.kwargs['output_options'], request.output_options.model_dump())
-            changes = history.update_task.call_args.args[1]
-            self.assertEqual(changes['video_output_options']['policy'], 'codec')
+            # The service persists these only after accepting the launch.
+            history.update_task.assert_not_called()
 
     async def test_compression_resume_keeps_output_options(self):
         choices = VideoOutputOptions(policy='custom', codec='h264', bitrate_mbps=8).model_dump()

@@ -68,16 +68,6 @@ async def start_pipeline(request: PipelineRequest):
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        history_manager.update_task(
-            request.task_id,
-            {
-                "last_process_route": "dubbing",
-                "last_subtitle_format": request.subtitle_format.lower(),
-                "dubbing_burn_subtitles": request.burn_subtitles,
-                "last_end_note_enabled": request.end_note_enabled,
-                "video_output_options": request.output_options.model_dump(),
-            },
-        )
         pipeline_service.start(
             request.task_id,
             request.target_lang,
@@ -125,10 +115,6 @@ async def decide_compression(task_id: str, decision: CompressionDecision):
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    data = {"status": "pipeline_translating", "pipeline_status": "processing",
-            "pipeline_stage": "pipeline_translating", "message": "正在精简已确认的译文..."}
-    history_manager.update_task(task_id, data)
-    emit_event(task_id, data)
     return {"status": "started", "task_id": task_id}
 
 

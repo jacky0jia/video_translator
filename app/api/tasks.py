@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.history import history_manager
 from app.core.events import event_generator, emit_event
 from app.core.file_security import contained_file
+from app.services.pipeline_service import pipeline_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,7 +24,7 @@ router = APIRouter()
 _TASK_EVENT_FIELDS = (
     "status", "message", "progress_percent", "pipeline_status", "pipeline_stage",
     "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
-    "burn_error", "video_codec", "video_encoder",
+    "burn_error", "video_codec", "video_encoder", "pipeline_run_id",
 )
 
 
@@ -206,6 +207,8 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if pipeline_service.is_busy(task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     updated = []
     timing_edit = edit.start is not None or edit.end is not None
     if timing_edit:
@@ -524,6 +527,8 @@ async def retry_task(task_id: str, background_tasks: BackgroundTasks):
     if not task:
         raise HTTPException(status_code=404, detail="taskNotFound")
 
+    if pipeline_service.is_busy(task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     source_path = task.get("source_path") or task.get("upload_path")
     if not source_path:
         raise HTTPException(status_code=400, detail="retryNoSourceFile")

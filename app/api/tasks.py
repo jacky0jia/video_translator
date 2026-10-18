@@ -82,6 +82,12 @@ def _delete_output_file(url_or_path: Optional[str], deleted_files: Optional[list
         logger.warning(f"Failed to delete output file {p}: {e}")
 
 
+def _delete_subtitle_versions(task, deleted_files=None):
+    from app.services.subtitle_timing_versions import subtitle_version_paths
+    for value in subtitle_version_paths(task):
+        _delete_output_file(value, deleted_files)
+
+
 class SegmentEdit(BaseModel):
     source_text: Optional[str] = None
     target_text: Optional[str] = None
@@ -109,6 +115,54 @@ class WorkflowOptions(BaseModel):
     subtitle_style: dict = Field(default_factory=dict)
     show_source: bool = True
     show_target: bool = True
+
+
+class TimingApplyRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    state_revision: int = Field(ge=0, strict=True)
+    fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class TimingUndoRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    state_revision: int = Field(ge=0, strict=True)
+    version_id: str = Field(min_length=32, max_length=32)
+
+
+def _timing_operation(task_id, action, request=None):
+    from app.services.subtitle_timing_versions import SubtitleTimingVersions, TimingVersionConflict
+    service = SubtitleTimingVersions(history_manager, settings.OUTPUT_DIR, pipeline_service.is_busy)
+    try:
+        if action == 'analyze':
+            return service.analyze(task_id)
+        state = (service.apply(task_id, request.state_revision, request.fingerprint) if action == 'apply'
+                 else service.undo(task_id, request.state_revision, request.version_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except TimingVersionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    changed = state.get('state_revision', 0) != request.state_revision
+    if changed:
+        emit_event(task_id, _task_event_snapshot(state))
+    return {'changed': changed, 'state_revision': state.get('state_revision', 0),
+            'active_version': state.get('subtitle_timing_active')}
+
+
+@router.get('/tasks/{task_id}/subtitle-timing')
+async def analyze_subtitle_timing(task_id: str):
+    return _timing_operation(task_id, 'analyze')
+
+
+@router.post('/tasks/{task_id}/subtitle-timing/apply')
+async def apply_subtitle_timing(task_id: str, request: TimingApplyRequest):
+    return _timing_operation(task_id, 'apply', request)
+
+
+@router.post('/tasks/{task_id}/subtitle-timing/undo')
+async def undo_subtitle_timing(task_id: str, request: TimingUndoRequest):
+    return _timing_operation(task_id, 'undo', request)
 
 
 @router.post('/tasks/{task_id}/workflow-options')
@@ -377,6 +431,7 @@ async def delete_all_tasks():
     deleted_count = 0
     for task in tasks:
         task_id = task["task_id"]
+        _delete_subtitle_versions(task)
         # Delete uploaded video
         upload_path = task.get("upload_path")
         if upload_path:
@@ -452,6 +507,7 @@ async def batch_delete_tasks(payload: BatchDeleteRequest):
         if not task:
             failed.append(task_id)
             continue
+        _delete_subtitle_versions(task)
         # Delete uploaded video
         upload_path = task.get("upload_path")
         if upload_path:
@@ -520,6 +576,7 @@ async def delete_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
 
     deleted_files: list[str] = []
+    _delete_subtitle_versions(task, deleted_files)
 
     # Delete uploaded video
     upload_path = task.get("upload_path")

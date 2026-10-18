@@ -13,6 +13,7 @@ from app.core.file_security import MEDIA_EXTENSIONS, MAX_MEDIA_BYTES, save_uploa
 from app.services.asr_service import asr_service
 from app.services.audio_service import audio_service
 from app.services.chunking_service import chunking_service, deduplicate_segments, bound_segments_to_duration
+from app.services.subtitle_timing_versions import write_subtitle_snapshot
 
 router = APIRouter()
 
@@ -90,12 +91,22 @@ async def run_transcription_task(
         transcription_result.segments = bound_segments_to_duration(
             transcription_result.segments, duration
         )
+        # Preserve completed ASR before later user edits/timing repair. This is
+        # after chunk assembly/duration bounding, not raw decoder token storage.
+        original_path = write_subtitle_snapshot(
+            settings.OUTPUT_DIR, transcription_result.model_dump_json(indent=4).encode('utf-8')
+        )
+        prior_task = history_manager.get_task(task_id) or {}
+        originals = list(prior_task.get('transcription_original_versions') or [])
+        originals.append(original_path)
         output_filename = f"{Path(filename).stem}_transcription_{task_id}"
         output_path = asr_service.save_to_json(transcription_result, output_filename)
 
         # 4. Update history
         history_manager.update_task(
-            task_id, {"status": "transcribed", "transcription_path": str(output_path), "language": transcription_result.language}
+            task_id, {"status": "transcribed", "transcription_path": str(output_path), "language": transcription_result.language,
+                      "transcription_original_path": original_path, "transcription_original_versions": originals,
+                      "transcription_duration": duration, "subtitle_timing_active": None}
         )
         emit_event(task_id, {"status": "transcribed", "message": "转录完成！", "progress_percent": 100, "transcription_path": str(output_path), "language": transcription_result.language})
 

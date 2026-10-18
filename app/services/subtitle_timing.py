@@ -1,4 +1,4 @@
-"""Pure, reversible timing proposals. Not yet connected to production writes.
+"""Pure, reversible timing proposals; persistence lives in subtitle_timing_versions.
 
 Small overlaps are candidates, not proof of erroneous ASR timestamps or silence.
 Never delete/reorder rows, merge text, or independently retime a translation.

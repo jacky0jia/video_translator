@@ -65,12 +65,18 @@ def test_transcription_api_bounds_segments_before_saving(monkeypatch, tmp_path):
         return tmp_path / "transcription.json"
 
     monkeypatch.setattr(settings, "CHUNKING_THRESHOLD_MINUTES", 15)
+    monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(api.audio_service, "extract_audio", extract)
     monkeypatch.setattr(api.chunking_service, "get_audio_duration", lambda _path: 12.0)
     monkeypatch.setattr(api.asr_service, "stage", stage)
     monkeypatch.setattr(api.asr_service, "transcribe", recognize)
     monkeypatch.setattr(api.asr_service, "save_to_json", save)
     monkeypatch.setattr(api.history_manager, "update_task", lambda *_args: None)
+    monkeypatch.setattr(api.history_manager, "get_task", lambda *_args: None)
     monkeypatch.setattr(api, "emit_event", lambda *_args: None)
     asyncio.run(api.run_transcription_task("acceptance", "input.mp4", "input.mp4", "en"))
     assert [(row.start, row.end) for row in captured] == [(0, 12)]
+    backups = list(tmp_path.glob('subtitle-version-*.json'))
+    assert len(backups) == 1
+    archived = TranscriptionResult.model_validate_json(backups[0].read_text(encoding='utf-8'))
+    assert [(row.start, row.end) for row in archived.segments] == [(0, 12)]

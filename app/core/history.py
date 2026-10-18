@@ -118,8 +118,18 @@ class HistoryManager:
                 return self._update_task(task_id, updates, run)
         return self._update_task(task_id, updates)
 
+    def compare_and_update_task(self, task_id: str, expected_revision: int, updates: Dict[str, Any]):
+        """Commit a decision only against the exact task snapshot it reviewed."""
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("Expected revision must be a non-negative integer")
+        run = current_task_run(task_id)
+        if run:
+            with run.lock:
+                return self._update_task(task_id, updates, run, expected_revision)
+        return self._update_task(task_id, updates, expected_revision=expected_revision)
+
     @_serialized
-    def _update_task(self, task_id: str, updates: Dict[str, Any], run=None):
+    def _update_task(self, task_id: str, updates: Dict[str, Any], run=None, expected_revision=None):
         history = self._read_history()
         for task in history:
             if task["task_id"] == task_id:
@@ -127,6 +137,8 @@ class HistoryManager:
                     logger.debug("Ignored obsolete pipeline write for task %s", task_id)
                     return False
                 revision = _next_revision(task)
+                if expected_revision is not None and revision - 1 != expected_revision:
+                    return False
                 task.update(updates)
                 task["state_revision"] = revision
                 self._write_history(history)

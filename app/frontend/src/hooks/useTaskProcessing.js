@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTaskSSE } from './useTaskSSE';
+import { useTaskScope, useTaskScopedState } from './useTaskScope';
 import {
   completedStageIds, deriveTaskProcessingState, selectedWorkflowState, retryPlanForFailure, stageId,
   stageIdForEvent, localizedTaskMessage, isStandaloneTranscriptionEvent,
@@ -28,32 +29,37 @@ function voiceMatches(voice, target) {
 }
 
 export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSource, showTarget }) {
-  const showToast = useToast();
+  const notify = useToast();
+  const scope = useTaskScope(task?.task_id);
+  const showToast = useCallback((...args) => {
+    if (scope.active) notify(...args);
+  }, [scope, notify]);
   const { t } = useI18n();
-  const [route, setRoute] = useState(task?.last_process_route || 'subtitles');
-  const [format, setFormat] = useState(task?.last_subtitle_format || 'srt');
-  const [burn, setBurn] = useState(false);
-  const [endNoteEnabled, setEndNoteEnabled] = useState(task?.last_end_note_enabled !== false);
-  const [videoOutput, setVideoOutput] = useState(() => ({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options }));
-  const [videoPlan, setVideoPlan] = useState(null);
-  const [videoPlanLoading, setVideoPlanLoading] = useState(false);
-  const [videoPlanError, setVideoPlanError] = useState('');
-  const [subtitleContent, setSubtitleContent] = useState('translated');
+  const [route, setRoute] = useTaskScopedState(scope, task?.last_process_route || 'subtitles');
+  const [format, setFormat] = useTaskScopedState(scope, task?.last_subtitle_format || 'srt');
+  const [burn, setBurn] = useTaskScopedState(scope, false);
+  const [endNoteEnabled, setEndNoteEnabled] = useTaskScopedState(scope, task?.last_end_note_enabled !== false);
+  const [videoOutput, setVideoOutput] = useTaskScopedState(scope, () => ({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options }));
+  const [videoPlan, setVideoPlan] = useTaskScopedState(scope, null);
+  const [videoPlanLoading, setVideoPlanLoading] = useTaskScopedState(scope, false);
+  const [videoPlanError, setVideoPlanError] = useTaskScopedState(scope, '');
+  const [subtitleContent, setSubtitleContent] = useTaskScopedState(scope, 'translated');
+  // The voice catalog belongs to system settings, not the selected task. Its
+  // existing request cleanup stays responsible for stale catalog responses.
   const [voices, setVoices] = useState([]);
-  const [voice, setVoice] = useState('');
+  const [voice, setVoice] = useTaskScopedState(scope, '');
   const [ttsMode, setTtsMode] = useState('');
   const [onlineLanguages, setOnlineLanguages] = useState([]);
   const [voiceError, setVoiceError] = useState('');
-  const [speed, setSpeed] = useState(1);
-  const [running, setRunning] = useState(false);
-  const [startPending, setStartPending] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [currentStage, setCurrentStage] = useState('');
-  const [message, setMessage] = useState(() => t('readyToProcess'));
-  const [status, setStatus] = useState('ready');
-  const [lastFailedStage, setLastFailedStage] = useState('');
-  const completionHandledRef = useRef(false);
-  const startRequestRef = useRef(false);
+  const [speed, setSpeed] = useTaskScopedState(scope, 1);
+  const [running, setRunning] = useTaskScopedState(scope, false);
+  const [startPending, setStartPending] = useTaskScopedState(scope, false);
+  const [progress, setProgress] = useTaskScopedState(scope, 0);
+  const [currentStage, setCurrentStage] = useTaskScopedState(scope, '');
+  const [message, setMessage] = useTaskScopedState(scope, () => t('readyToProcess'));
+  const [status, setStatus] = useTaskScopedState(scope, 'ready');
+  const [lastFailedStage, setLastFailedStage] = useTaskScopedState(scope, '');
+  const { completionHandledRef, startRequestRef } = scope;
 
   const targetLang = task?.target_lang || 'Chinese';
   const requiredStages = useMemo(() => route === 'dubbing'
@@ -71,6 +77,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   useEffect(() => {
     setVideoOutput({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options });
     setVideoPlan(null);
+    setVideoPlanLoading(false);
+    setVideoPlanError('');
   }, [task?.task_id]);
 
   useEffect(() => {
@@ -144,6 +152,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, [matchingVoices, onlineLanguages, targetLang, task?.task_id, task?.dubbing_voice]);
 
   useEffect(() => {
+    // Language changes rerun this effect too. Do not restore an old persisted
+    // snapshot over an in-flight local start; a different task has its own lock.
+    if (startRequestRef.current) return;
     const restored = deriveTaskProcessingState(task, t);
     setRoute(task?.last_process_route || 'subtitles');
     setFormat(task?.last_subtitle_format || 'srt');
@@ -153,6 +164,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     setMessage(restored.message);
     setStatus(restored.status);
     setRunning(restored.running);
+    setStartPending(false);
     setLastFailedStage(task?.failed_stage || task?.interrupted_status || '');
     completionHandledRef.current = false;
   }, [task?.task_id, t]);
@@ -192,6 +204,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, [task?.status, task?.progress_percent, task?.message, task?.gpu_stage, task?.pipeline_stage, task?.pipeline_status, task?.dubbing_status, task?.burn_status, t]);
 
   useEffect(() => {
+    if (startRequestRef.current) return;
     const completion = standaloneTranscriptionCompletion({ status: task?.status }, t);
     if (!completion || task?.pipeline_status === 'processing') return;
     setProgress(completion.progress);
@@ -396,7 +409,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   };
 
   const run = async ({ forceTranslate = false, forceDub = false, resume = false } = {}) => {
-    if (startRequestRef.current || running || !task?.transcription_path) return;
+    if (!scope.active || startRequestRef.current || running || !task?.transcription_path) return;
     startRequestRef.current = true;
     setStartPending(route === 'dubbing');
     completionHandledRef.current = false;
@@ -458,12 +471,13 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   };
 
   const cancel = async () => {
-    if (route !== 'dubbing') return;
+    if (!scope.active || route !== 'dubbing') return;
     const response = await fetch(`/api/pipeline/${task.task_id}/cancel`, { method: 'POST' });
     if (!response.ok) showToast(t('pipelineCancelFailed'), 'error');
   };
 
   const decideCompression = async approve => {
+    if (!scope.active) return;
     const response = await fetch(`/api/pipeline/${task.task_id}/compression`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approve }),

@@ -63,6 +63,23 @@ test('disconnect invalidates a connection before reconnect and rejects all its l
   assert.deepEqual(received, ['dubbing']);
 });
 
+test('old stream cannot invoke the new task callback before effect cleanup', () => {
+  const h = harness(), received = [];
+  h.hook('A', event => received.push(['A', event.status]));
+  const cleanup = h.effects.pop()(), old = h.connections[0];
+  h.hook('B', event => received.push(['B', event.status]));
+  old.message({ status: 'failed' });
+  old.onerror();
+  old.listeners.not_found();
+  assert.deepEqual(received, []);
+  assert.equal(h.timers.size, 0);
+  cleanup();
+  const finish = h.effects.pop()(), current = h.connections[1];
+  current.message({ status: 'dubbing' });
+  assert.deepEqual(received, [['B', 'dubbing']]);
+  finish();
+});
+
 test('not_found and unmount clear retry timers and do not reconnect', () => {
   const h = harness();
   h.hook('A', () => assert.fail('Unexpected event'));

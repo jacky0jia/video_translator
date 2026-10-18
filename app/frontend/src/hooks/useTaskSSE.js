@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 
 export function useTaskSSE(taskId, onEvent) {
-  const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
+  const onEventRef = useRef({ taskId, onEvent });
+  onEventRef.current = { taskId, onEvent };
 
   useEffect(() => {
     if (!taskId) return;
@@ -14,12 +14,12 @@ export function useTaskSSE(taskId, onEvent) {
       if (closed) return;
       const connection = new EventSource(`/api/tasks/${taskId}/events`);
       source = connection;
-      const isCurrent = () => !closed && source === connection;
+      const isCurrent = () => !closed && source === connection && onEventRef.current.taskId === taskId;
       connection.onmessage = (e) => {
         if (!isCurrent()) return;
         try {
           const data = JSON.parse(e.data);
-          onEventRef.current?.(data);
+          onEventRef.current.onEvent?.(data);
         } catch {
           // ignore parse errors
         }

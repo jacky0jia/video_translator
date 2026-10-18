@@ -27,10 +27,13 @@ class PipelineUiSyncTests(unittest.TestCase):
 
     def test_frontend_locks_duplicate_start_and_keeps_tracking_conflict(self):
         hook = (ROOT / "app/frontend/src/hooks/useTaskProcessing.js").read_text(encoding="utf-8")
+        scope = (ROOT / "app/frontend/src/hooks/useTaskScope.js").read_text(encoding="utf-8")
         tasks_api = (ROOT / "app/api/tasks.py").read_text(encoding="utf-8")
 
-        self.assertIn("const startRequestRef = useRef(false)", hook)
-        self.assertIn("if (startRequestRef.current || running", hook)
+        self.assertIn("const scope = useTaskScope(task?.task_id)", hook)
+        self.assertIn("const { completionHandledRef, startRequestRef } = scope", hook)
+        self.assertIn("startRequestRef: { current: false }", scope)
+        self.assertIn("if (!scope.active || startRequestRef.current || running", hook)
         self.assertIn("startRequestRef.current = true", hook)
         self.assertIn("if (transcriptionCompletion)", hook)
         self.assertIn("if (task?.transcription_path || event.pipeline_status === 'processing') return", hook)

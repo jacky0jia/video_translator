@@ -210,7 +210,7 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertNotIn("'hidden md:flex'", app)
         for page in ("tasks", "preview", "process", "export"):
             self.assertIn(f'data-page="{page}"', app)
-        self.assertIn("if (ttsMode === 'qwen') setSpeed(1)", processing)
+        self.assertIn("if (ttsMode === 'qwen') setOption('speed', 1, false)", processing)
         self.assertIn("onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''", processing)
         self.assertIn("onlineLanguages.includes(languageCode(targetLang))", panel)
         self.assertIn("route === 'dubbing' && !voice", panel)

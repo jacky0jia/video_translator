@@ -5,11 +5,11 @@ import logging
 import math
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from app.services.video_output import VideoOutputOptions, make_output_plan
 
 from app.core.config import settings
@@ -93,6 +93,42 @@ class VideoPlanRequest(BaseModel):
     output_options: VideoOutputOptions
     burn_subtitles: bool = False
     end_note_enabled: bool = True
+
+
+class WorkflowOptions(BaseModel):
+    """The last submitted UI request, separate from execution/completion state."""
+    model_config = ConfigDict(extra='forbid')
+    route: Literal['subtitles', 'dubbing'] = 'subtitles'
+    subtitle_format: Literal['srt', 'vtt', 'ass'] = 'srt'
+    burn_subtitles: bool = False
+    end_note_enabled: bool = True
+    subtitle_content: Literal['translated', 'bilingual'] = 'translated'
+    voice: str = Field(default='', max_length=256)
+    speed: float = Field(default=1, ge=0.25, le=4, allow_inf_nan=False)
+    output_options: VideoOutputOptions = Field(default_factory=VideoOutputOptions)
+    subtitle_style: dict = Field(default_factory=dict)
+    show_source: bool = True
+    show_target: bool = True
+
+
+@router.post('/tasks/{task_id}/workflow-options')
+async def save_workflow_options(task_id: str, request: WorkflowOptions):
+    task = history_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(404, 'Task not found')
+    if (pipeline_service.is_busy(task_id) or translation_busy(task_id)
+            or task.get('pipeline_cleanup_pending')
+            or task.get('pipeline_status') in {'processing', 'cancelling', 'awaiting_compression'}
+            or task.get('dubbing_status') == 'processing' or task.get('burn_status') == 'processing'):
+        raise HTTPException(409, 'Pipeline already running; workflow options were not changed')
+    # This update never claims that a stage ran, approves a review, or changes
+    # cached artifacts. Compare-and-set protects a concurrent worker's snapshot.
+    saved = history_manager.compare_and_update_task(task_id, task.get('state_revision', 0), {
+        'workflow_options': request.model_dump(),
+    })
+    if not saved:
+        raise HTTPException(409, 'Task changed; refresh before continuing')
+    return {'workflow_options': saved['workflow_options'], 'state_revision': saved['state_revision']}
 
 
 @router.post('/tasks/{task_id}/video-plan')

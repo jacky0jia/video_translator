@@ -7,8 +7,8 @@ const esbuild = require('../app/frontend/node_modules/esbuild');
 
 // Run the actual hook, including dependency-aware effect cleanup. All network,
 // timers and settings are local fakes; no backend or model is invoked.
-function harness(initialTask, { automaticVoices = true } = {}) {
-  const cells = [], requests = [], toasts = [], refreshes = [], timers = new Map();
+function harness(initialTask, { automaticVoices = true, automaticSave = true } = {}) {
+  const cells = [], requests = [], saves = [], toasts = [], refreshes = [], timers = new Map();
   const listeners = new Map();
   let index = 0, dirty = false, view, selected = initialTask, stream;
   let layout = [], effects = [], timerId = 0, stateWrites = 0, refreshHold;
@@ -54,6 +54,10 @@ function harness(initialTask, { automaticVoices = true } = {}) {
         if (url === '/api/dubbing/voices' && automaticVoices) {
           return Promise.resolve(response({ voices: [{ id: 'voice', language: 'zh' }], tts_mode: 'qwen' }));
         }
+        if (url.endsWith('/workflow-options')) {
+          saves.push({ url, body: JSON.parse(options.body) });
+          if (automaticSave) return Promise.resolve(response({ workflow_options: JSON.parse(options.body) }));
+        }
         return new Promise(resolve => requests.push({ url, options,
           respond: (data, ok, status) => resolve(response(data, ok, status)),
         }));
@@ -63,6 +67,7 @@ function harness(initialTask, { automaticVoices = true } = {}) {
   }
   const scope = compile('hooks/useTaskScope.js', () => react);
   const state = compile('hooks/taskProcessingState.js');
+  const workflow = compile('hooks/useWorkflowOptions.js', () => react);
   let t = key => key;
   const notify = (...args) => toasts.push(args);
   const onTaskRefresh = id => {
@@ -74,6 +79,7 @@ function harness(initialTask, { automaticVoices = true } = {}) {
     if (name === 'react') return react;
     if (name.endsWith('useTaskScope')) return scope;
     if (name.endsWith('taskProcessingState')) return state;
+    if (name.endsWith('useWorkflowOptions')) return workflow;
     if (name.endsWith('useTaskSSE')) return { useTaskSSE: (id, callback) => { stream = { id, callback }; } };
     if (name.endsWith('ToastContext')) return { useToast: () => notify };
     if (name.endsWith('I18nContext')) return { useI18n: () => ({ t }) };
@@ -105,7 +111,7 @@ function harness(initialTask, { automaticVoices = true } = {}) {
   }
   render();
   return {
-    render, settle, requests, refreshes, toasts, tick, holdRefresh,
+    render, settle, requests, saves, refreshes, toasts, tick, holdRefresh,
     get view() { return view; }, get stateWrites() { return stateWrites; },
     changeLanguage() { t = key => `localized:${key}`; render(); },
     event: data => stream.callback(data),
@@ -124,17 +130,96 @@ const snapshot = h => JSON.stringify(Object.fromEntries([
 async function ready(taskData = task('A'), options) { const h = harness(taskData, options); await h.settle(); return h; }
 async function reachPipeline(h) {
   const pending = h.view.run();
+  await h.settle();
   h.requests.at(-1).respond({ encoder: 'test' }); await h.settle();
   assert.equal(h.requests.at(-1).url, '/api/pipeline');
   return { pending, request: h.requests.at(-1) };
 }
 
+test('saved request restores all workflow options before manual continuation', async () => {
+  const saved = { route: 'dubbing', subtitle_format: 'ass', burn_subtitles: true,
+    end_note_enabled: false, subtitle_content: 'bilingual', voice: 'voice-2', speed: 1.2,
+    output_options: { policy: 'custom', codec: 'h264', resolution: '1080', bitrate_mbps: 8 },
+    subtitle_style: { fontSize: 30 }, show_source: false, show_target: true };
+  const h = await ready(task('A', { status: 'awaiting_dubbing_edit', pipeline_status: 'awaiting_dubbing_edit', workflow_options: saved }), { automaticVoices: false });
+  h.requests[0].respond({ voices: [{ id: 'voice', language: 'zh' }, { id: 'voice-2', language: 'zh' }], tts_mode: 'edge' });
+  await h.settle();
+  for (const [key, value] of Object.entries({ route: 'dubbing', format: 'ass', burn: true,
+    endNoteEnabled: false, subtitleContent: 'bilingual', voice: 'voice-2', speed: 1.2 })) assert.equal(h.view[key], value, key);
+  assert.equal(JSON.stringify(h.view.videoOutput), JSON.stringify(saved.output_options));
+  assert.equal(h.view.status, 'awaiting_dubbing_edit'); assert.equal(h.saves.length, 0);
+  const { pending, request } = await reachPipeline(h);
+  const body = JSON.parse(request.options.body);
+  assert.equal(body.voice, 'voice-2'); assert.equal(body.speed, 1.2);
+  assert.equal(body.subtitle_format, 'ass'); assert.equal(body.burn_subtitles, true);
+  assert.equal(h.saves[0].body.subtitle_style.fontSize, 30);
+  request.respond({ status: 'started' }); await pending;
+});
+
+test('switching tasks resets every option instead of leaking unsaved A choices', async () => {
+  const h = await ready();
+  h.view.setBurn(true); h.view.setFormat('ass'); h.view.setSubtitleContent('bilingual');
+  h.view.setEndNoteEnabled(false); h.view.setVideoOutput({ policy: 'custom' }); h.render();
+  const oldSetter = h.view.setBurn;
+  h.render(task('B', { last_process_route: 'subtitles' })); await h.settle();
+  oldSetter(true); await h.settle();
+  assert.equal(h.view.route, 'subtitles'); assert.equal(h.view.burn, false);
+  assert.equal(h.view.format, 'srt'); assert.equal(h.view.subtitleContent, 'translated');
+  assert.equal(h.view.endNoteEnabled, true); assert.equal(h.view.videoOutput.policy, 'balanced');
+});
+
+test('same-task refresh and interface language cannot overwrite current form edits', async () => {
+  const original = task('A', { workflow_options: { route: 'dubbing', subtitle_format: 'srt' } });
+  const h = await ready(original);
+  h.view.setRoute('subtitles'); h.view.setFormat('vtt'); h.view.setBurn(true); h.render();
+  h.render({ ...original, state_revision: 30 }); h.changeLanguage(); await h.settle();
+  assert.equal(h.view.route, 'subtitles'); assert.equal(h.view.format, 'vtt'); assert.equal(h.view.burn, true);
+});
+
+test('late initial task detail hydrates saved choices before any local edit', async () => {
+  const h = await ready(task('A'));
+  h.render(task('A', { workflow_options: { subtitle_format: 'vtt', burn_subtitles: true, subtitle_content: 'bilingual' } }));
+  await h.settle();
+  assert.equal(h.view.format, 'vtt'); assert.equal(h.view.burn, true); assert.equal(h.view.subtitleContent, 'bilingual');
+});
+
+test('saved legacy voice and speed restore, catalog reload keeps a manual compatible voice', async () => {
+  const h = await ready(task('A', { dubbing_voice: 'second', dubbing_speed: 1.15 }), { automaticVoices: false });
+  const catalog = { voices: [{ id: 'first', language: 'zh' }, { id: 'second', language: 'zh' }], tts_mode: 'edge' };
+  h.requests[0].respond(catalog); await h.settle();
+  assert.equal(h.view.voice, 'second'); assert.equal(h.view.speed, 1.15);
+  h.view.setVoice('first'); h.render(); h.changeLanguage(); await h.settle();
+  assert.equal(h.view.voice, 'first');
+  h.requests.at(-1).respond(catalog); await h.settle(); assert.equal(h.view.voice, 'first');
+  h.render(task('B')); await h.settle(); assert.equal(h.view.speed, 1);
+});
+
+test('subtitle request saves options before translation and stops on persistence failure', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles', translations: {} }), { automaticSave: false });
+  h.view.setBurn(true); h.view.setFormat('ass'); h.view.setSubtitleContent('bilingual'); h.render();
+  const pending = h.view.run(); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/workflow-options');
+  assert.equal(h.saves[0].body.burn_subtitles, true); assert.equal(h.saves[0].body.subtitle_format, 'ass');
+  assert.equal(h.saves[0].body.subtitle_content, 'bilingual');
+  assert.equal(h.requests.some(item => item.url === '/api/translate'), false);
+  h.requests.at(-1).respond({ detail: 'Cannot save' }, false); await pending; await h.settle();
+  assert.equal(h.view.status, 'failed'); assert.equal(h.requests.length, 1);
+});
+
+test('late parameter save failure for A cannot affect B or its unsaved options', async () => {
+  const h = await ready(task('A'), { automaticSave: false });
+  const pending = h.view.run(); const request = h.requests.at(-1);
+  h.render(task('B')); await h.settle(); h.view.setBurn(true); h.render(); const before = snapshot(h);
+  request.respond({ detail: 'A failed to save' }, false); await pending; await h.settle();
+  assert.equal(snapshot(h), before); assert.equal(h.view.burn, true); assert.equal(h.toasts.length, 0);
+});
+
 test('late preflight failure cannot change B state, notification or startup lock', async () => {
   const h = await ready();
-  const a = h.view.run(), preflightA = h.requests.at(-1); await h.settle();
+  const a = h.view.run(); await h.settle(); const preflightA = h.requests.at(-1);
   h.render(task('B')); await h.settle();
   assert.equal(h.view.startPending, false);
-  const b = h.view.run(), preflightB = h.requests.at(-1); await h.settle();
+  const b = h.view.run(); await h.settle(); const preflightB = h.requests.at(-1);
   const before = snapshot(h);
   preflightA.respond({ detail: 'A invalid' }, false); await a; await h.settle();
   assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
@@ -145,9 +230,9 @@ test('late preflight failure cannot change B state, notification or startup lock
 
 test('submitted A preflight may finish A pipeline, never write to B or release its lock', async () => {
   const h = await ready();
-  const a = h.view.run(), planA = h.requests.at(-1); await h.settle();
+  const a = h.view.run(); await h.settle(); const planA = h.requests.at(-1);
   h.render(task('B')); await h.settle();
-  const b = h.view.run(), planB = h.requests.at(-1); await h.settle(); const before = snapshot(h);
+  const b = h.view.run(); await h.settle(); const planB = h.requests.at(-1); const before = snapshot(h);
   planA.respond({ encoder: 'A' }); await h.settle();
   const postA = h.requests.at(-1);
   assert.equal(JSON.parse(postA.options.body).task_id, 'A');
@@ -167,9 +252,9 @@ for (const status of [500, 409]) test(`late A pipeline ${status} does not change
 
 test('A to B to A uses a fresh startup scope, old finally cannot unlock the new A start', async () => {
   const h = await ready();
-  const old = h.view.run(), oldPlan = h.requests.at(-1); await h.settle();
+  const old = h.view.run(); await h.settle(); const oldPlan = h.requests.at(-1);
   h.render(task('B')); await h.settle(); h.render(task('A')); await h.settle();
-  const current = h.view.run(), newPlan = h.requests.at(-1); await h.settle();
+  const current = h.view.run(); await h.settle(); const newPlan = h.requests.at(-1);
   assert.notEqual(oldPlan, newPlan); const before = snapshot(h);
   oldPlan.respond({ detail: 'old A failed' }, false); await old; await h.settle();
   assert.equal(snapshot(h), before);
@@ -180,7 +265,7 @@ test('A to B to A uses a fresh startup scope, old finally cannot unlock the new 
 
 for (const ok of [true, false]) test(`old subtitle translation/export ${ok ? 'success' : 'failure'} stays with A`, async () => {
   const h = await ready(task('A', { last_process_route: 'subtitles', translations: {} }));
-  const pending = h.view.run(), translate = h.requests.at(-1);
+  const pending = h.view.run(); await h.settle(); const translate = h.requests.at(-1);
   assert.equal(translate.url, '/api/translate'); await h.settle();
   h.render(activeB()); await h.settle(); const before = snapshot(h);
   translate.respond({ detail: 'translation failed' }, ok); await h.settle();
@@ -253,14 +338,14 @@ test('settings voice catalog response remains usable after a task switch', async
 
 test('effect cleanup/setup replay keeps current task scope active', async () => {
   const h = await ready(); h.replayEffects(); await h.settle();
-  const pending = h.view.run(); assert.ok(h.requests.at(-1).url.endsWith('/A/video-plan'));
+  const pending = h.view.run(); await h.settle(); assert.ok(h.requests.at(-1).url.endsWith('/A/video-plan'));
   h.requests.at(-1).respond({ detail: 'current validation failed' }, false); await pending; await h.settle();
   assert.equal(h.view.status, 'failed'); assert.equal(h.toasts.length, 1);
 });
 
 test('language change during a pending start cannot restore old terminal state or unlock SSE', async () => {
   const h = await ready();
-  const pending = h.view.run(), plan = h.requests.at(-1); await h.settle();
+  const pending = h.view.run(); await h.settle(); const plan = h.requests.at(-1);
   h.changeLanguage(); await h.settle();
   assert.equal(h.view.startPending, true); assert.equal(h.view.running, true);
   const count = h.requests.length; await h.view.run(); assert.equal(h.requests.length, count);
@@ -334,6 +419,7 @@ test('reload restores review waiting without approving, exporting or starting a 
 test('new subtitle translation pauses without export or success notification', async () => {
   const h = await ready(task('A', { last_process_route: 'subtitles', translations: {} }));
   const pending = h.view.run();
+  await h.settle();
   h.requests.at(-1).respond({ review_required: true, review: { review_id: 'fresh' }, state_revision: 15 });
   await pending; await h.settle();
   assert.equal(h.view.status, 'awaiting_review'); assert.equal(h.view.running, false);
@@ -392,6 +478,7 @@ test('dubbing review event stops processing and next click sends the newest live
 test('retranslation does not approve the previous token', async () => {
   const h = await ready(reviewTask({ last_process_route: 'dubbing' }));
   const pending = h.view.run({ forceTranslate: true, forceDub: true });
+  await h.settle();
   h.requests.at(-1).respond({ encoder: 'test' }); await h.settle();
   const body = JSON.parse(h.requests.at(-1).options.body);
   assert.equal(body.force_translate, true); assert.equal(body.review_id, null);

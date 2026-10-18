@@ -12,6 +12,8 @@ import { useI18n } from './contexts/I18nContext';
 import { useTheme } from './contexts/ThemeContext';
 import { createTaskRequestScope } from './utils/taskRequestScope';
 import { acceptTaskState, olderTaskState } from './utils/taskStateVersion';
+import { useTaskScope } from './hooks/useTaskScope';
+import { useWorkflowOptions } from './hooks/useWorkflowOptions';
 
 const ACTIVE_STATUSES = new Set([
   'pending', 'extracting_audio', 'waiting_for_gpu', 'switching_model', 'transcribing',
@@ -42,9 +44,10 @@ export default function App() {
   const [listeningTaskId, setListeningTaskId] = useState(null);
   const [highlightTaskId, setHighlightTaskId] = useState(null);
   const [mobilePage, setMobilePage] = useState('preview');
-  const [subtitleStyle, setSubtitleStyle] = useState({ offsetY: 0, fontSize: 18, sourceColor: '#FFFFFF', targetColor: '#FDE047', bold: false, fontFamily: 'Arial' });
-  const [showSource, setShowSource] = useState(true);
-  const [showTarget, setShowTarget] = useState(true);
+  const previewScope = useTaskScope(currentTask?.task_id);
+  const { options: previewOptions, setters: previewSetters } = useWorkflowOptions(previewScope, currentTask);
+  const { subtitle_style: subtitleStyle, show_source: showSource, show_target: showTarget } = previewOptions;
+  const { subtitle_style: setSubtitleStyle, show_source: setShowSource, show_target: setShowTarget } = previewSetters;
   const requestScope = useRef(null);
   if (!requestScope.current) requestScope.current = createTaskRequestScope();
   const uploadPlaceholder = useRef(null);
@@ -66,7 +69,7 @@ export default function App() {
     }
   }, []);
 
-  const readSelectedTask = useCallback(async (taskId, resetVisibility = false) => {
+  const readSelectedTask = useCallback(async taskId => {
     const ticket = requestScope.current.beginDetail(taskId);
     if (!ticket) return;
     try {
@@ -77,7 +80,6 @@ export default function App() {
       if (data.task?.task_id !== taskId) throw new Error('Unable to load task');
       if (!acceptTaskState(taskId, data.task)) return;
       setCurrentTask(data.task);
-      if (resetVisibility) setShowSource(Boolean(data.task.transcription_path));
     } catch (error) {
       if (requestScope.current.acceptsDetail(ticket)) showToast(error.message, 'error');
     }
@@ -88,10 +90,8 @@ export default function App() {
     const cached = tasks.find(item => item.task_id === taskId) || null;
     setCurrentTask(cached);
     setHighlightTaskId(null);
-    setShowSource(Boolean(cached?.transcription_path));
-    setShowTarget(true);
     setMobilePage('preview');
-    await readSelectedTask(taskId, true);
+    await readSelectedTask(taskId);
   }, [tasks, readSelectedTask]);
 
   const refreshTask = useCallback(async taskId => {

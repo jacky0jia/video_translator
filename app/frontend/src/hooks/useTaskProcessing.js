@@ -8,7 +8,7 @@ import {
 } from './taskProcessingState';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
-import { DEFAULT_VIDEO_OUTPUT } from '../components/VideoOutputOptions';
+import { useWorkflowOptions } from './useWorkflowOptions';
 
 export const PROCESS_STAGES = ['transcribe', 'translate', 'dub', 'render'];
 
@@ -28,30 +28,30 @@ function voiceMatches(voice, target) {
   return actual === expected || actual.startsWith(expected);
 }
 
-export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSource, showTarget }) {
+export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: providedSubtitleStyle, showSource, showTarget }) {
   const notify = useToast();
   const scope = useTaskScope(task?.task_id);
   const showToast = useCallback((...args) => {
     if (scope.active) notify(...args);
   }, [scope, notify]);
   const { t } = useI18n();
-  const [route, setRoute] = useTaskScopedState(scope, task?.last_process_route || 'subtitles');
-  const [format, setFormat] = useTaskScopedState(scope, task?.last_subtitle_format || 'srt');
-  const [burn, setBurn] = useTaskScopedState(scope, false);
-  const [endNoteEnabled, setEndNoteEnabled] = useTaskScopedState(scope, task?.last_end_note_enabled !== false);
-  const [videoOutput, setVideoOutput] = useTaskScopedState(scope, () => ({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options }));
+  const taskStateIsStale = Number.isSafeInteger(scope.latestRevision)
+    && (!Number.isSafeInteger(task?.state_revision) || task.state_revision < scope.latestRevision);
+  const { options, setters, setOption } = useWorkflowOptions(scope, task, taskStateIsStale);
+  const subtitleStyle = providedSubtitleStyle ?? options.subtitle_style;
+  const { route, subtitle_format: format, burn_subtitles: burn, end_note_enabled: endNoteEnabled,
+    output_options: videoOutput, subtitle_content: subtitleContent, voice, speed } = options;
+  const { route: setRoute, subtitle_format: setFormat, burn_subtitles: setBurn, end_note_enabled: setEndNoteEnabled,
+    output_options: setVideoOutput, subtitle_content: setSubtitleContent, voice: setVoice, speed: setSpeed } = setters;
   const [videoPlan, setVideoPlan] = useTaskScopedState(scope, null);
   const [videoPlanLoading, setVideoPlanLoading] = useTaskScopedState(scope, false);
   const [videoPlanError, setVideoPlanError] = useTaskScopedState(scope, '');
-  const [subtitleContent, setSubtitleContent] = useTaskScopedState(scope, 'translated');
   // The voice catalog belongs to system settings, not the selected task. Its
   // existing request cleanup stays responsible for stale catalog responses.
   const [voices, setVoices] = useState([]);
-  const [voice, setVoice] = useTaskScopedState(scope, '');
   const [ttsMode, setTtsMode] = useState('');
   const [onlineLanguages, setOnlineLanguages] = useState([]);
   const [voiceError, setVoiceError] = useState('');
-  const [speed, setSpeed] = useTaskScopedState(scope, 1);
   const [running, setRunning] = useTaskScopedState(scope, false);
   const [startPending, setStartPending] = useTaskScopedState(scope, false);
   const [cancelPending, setCancelPending] = useTaskScopedState(scope, false);
@@ -61,9 +61,6 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   const [status, setStatus] = useTaskScopedState(scope, 'ready');
   const [lastFailedStage, setLastFailedStage] = useTaskScopedState(scope, '');
   const { completionHandledRef, startRequestRef } = scope;
-  // Unversioned legacy details must not overwrite an accepted versioned event.
-  const taskStateIsStale = Number.isSafeInteger(scope.latestRevision)
-    && (!Number.isSafeInteger(task?.state_revision) || task.state_revision < scope.latestRevision);
 
   const targetLang = task?.target_lang || 'Chinese';
   const requiredStages = useMemo(() => route === 'dubbing'
@@ -79,7 +76,6 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   );
 
   useEffect(() => {
-    setVideoOutput({ ...DEFAULT_VIDEO_OUTPUT, ...task?.video_output_options });
     setVideoPlan(null);
     setVideoPlanLoading(false);
     setVideoPlanError('');
@@ -117,7 +113,6 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
       controller?.abort();
       controller = new AbortController();
       setVoices([]);
-      setVoice('');
       setTtsMode('');
       return fetch('/api/dubbing/voices', { cache: 'no-store', signal: controller.signal })
       .then(res => res.ok ? res.json() : Promise.reject())
@@ -146,23 +141,22 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
   }, [t]);
 
   useEffect(() => {
-    if (ttsMode === 'qwen') setSpeed(1);
-  }, [ttsMode]);
+    if (ttsMode === 'qwen') setOption('speed', 1, false);
+  }, [ttsMode, scope, speed]);
 
   useEffect(() => {
-    const preferred = matchingVoices.find(item => item.id === task?.dubbing_voice) || matchingVoices[0];
-    if (languageCode(targetLang) === 'ko') setVoice(preferred?.id || (onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''));
-    else setVoice(preferred?.id || '');
-  }, [matchingVoices, onlineLanguages, targetLang, task?.task_id, task?.dubbing_voice]);
+    // A catalog reload must not erase a saved or manually selected voice while
+    // loading. Once loaded, keep it if compatible with this task's language.
+    if (!voices.length) return;
+    const preferred = matchingVoices.find(item => item.id === voice) || matchingVoices[0];
+    setOption('voice', preferred?.id || (languageCode(targetLang) === 'ko' && onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''), false);
+  }, [matchingVoices, onlineLanguages, targetLang, scope, voice]);
 
   useEffect(() => {
     // Language changes rerun this effect too. Do not restore an old persisted
     // snapshot over an in-flight local start; a different task has its own lock.
     if (startRequestRef.current || taskStateIsStale) return;
     const restored = deriveTaskProcessingState(task, t);
-    setRoute(task?.last_process_route || 'subtitles');
-    setFormat(task?.last_subtitle_format || 'srt');
-    setEndNoteEnabled(task?.last_end_note_enabled !== false);
     setProgress(restored.progress);
     setCurrentStage(restored.currentStage);
     setMessage(restored.message);
@@ -498,6 +492,19 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle, showSour
     setProgress(0);
     setCurrentStage(firstStage);
     try {
+      // Save the actual request before translation can pause. Subtitle-only
+      // workflows do not reach export (the old save point) until confirmation.
+      const saved = await fetch(`/api/tasks/${task.task_id}/workflow-options`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...options, subtitle_style: subtitleStyle || options.subtitle_style,
+          show_source: showSource ?? options.show_source, show_target: showTarget ?? options.show_target }),
+      });
+      const savedData = await saved.json().catch(() => ({}));
+      if (!saved.ok) {
+        const error = new Error(savedData.detail || 'Unable to save workflow options');
+        error.httpStatus = saved.status;
+        throw error;
+      }
       if (route === 'dubbing') {
         // Validate and probe before expensive translation/synthesis, even if the
         // folded preview has not finished loading yet.

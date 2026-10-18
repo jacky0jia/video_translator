@@ -9,15 +9,31 @@ const esbuild = require('../app/frontend/node_modules/esbuild');
 // components are inert so these tests cannot touch a running backend or GPU.
 function harness() {
   const cells = [], requests = [], toasts = [];
-  let index = 0, tree, stream;
+  let index = 0, tree, stream, dirty = false, layout = [];
+  const changed = (a, b) => !a || !b || a.length !== b.length || a.some((value, i) => !Object.is(value, b[i]));
   const react = {
     useState(initial) {
       const slot = index++;
       if (!(slot in cells)) cells[slot] = typeof initial === 'function' ? initial() : initial;
-      return [cells[slot], value => { cells[slot] = typeof value === 'function' ? value(cells[slot]) : value; }];
+      return [cells[slot], value => {
+        const next = typeof value === 'function' ? value(cells[slot]) : value;
+        if (!Object.is(next, cells[slot])) { cells[slot] = next; dirty = true; }
+      }];
     },
     useRef(initial) { const slot = index++; return cells[slot] ||= { current: initial }; },
     useCallback: fn => fn, useEffect() {},
+    useMemo(fn, deps) {
+      const slot = index++;
+      if (changed(cells[slot]?.deps, deps)) cells[slot] = { value: fn(), deps };
+      return cells[slot].value;
+    },
+    useLayoutEffect(fn, deps) {
+      const slot = index++, previous = cells[slot];
+      if (changed(previous?.deps, deps)) {
+        cells[slot] = { deps, cleanup: previous?.cleanup };
+        layout.push(() => { cells[slot].cleanup?.(); cells[slot].cleanup = fn(); });
+      }
+    },
   };
   const jsx = (type, props) => ({ type, props });
   const root = path.resolve(__dirname, '../app/frontend/src');
@@ -35,19 +51,29 @@ function harness() {
   }
   const scope = compile(path.join(root, 'utils/taskRequestScope.js'));
   const versions = compile(path.join(root, 'utils/taskStateVersion.js'));
+  const taskScope = compile(path.join(root, 'hooks/useTaskScope.js'), () => react);
+  const workflow = compile(path.join(root, 'hooks/useWorkflowOptions.js'), () => react);
   const toast = (...args) => toasts.push(args);
   const App = compile(path.join(root, 'App.jsx'), name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
     if (name.includes('taskRequestScope')) return scope;
     if (name.includes('taskStateVersion')) return versions;
+    if (name.includes('useTaskScope')) return taskScope;
+    if (name.includes('useWorkflowOptions')) return workflow;
     if (name.includes('useTaskSSE')) return { useTaskSSE: (id, callback) => { stream = { id, callback }; } };
     if (name.includes('ToastContext')) return { useToast: () => toast };
     if (name.includes('I18nContext')) return { useI18n: () => ({ t: key => key, lang: 'en' }) };
     if (name.includes('ThemeContext')) return { useTheme: () => ({ theme: 'light' }) };
     return { __esModule: true, default: name.split('/').pop() };
   }).default;
-  function render() { index = 0; tree = App(); }
+  function render() {
+    for (let turn = 0; turn < 30; turn++) {
+      index = 0; dirty = false; layout = []; tree = App(); layout.forEach(fn => fn());
+      if (!dirty) return;
+    }
+    throw Error('App did not settle');
+  }
   function props(name, node = tree) {
     if (!node || typeof node !== 'object') return;
     if (node.type === name) return node.props;
@@ -71,6 +97,17 @@ async function select(h, id) {
   h.requests.at(-1).respond({ task: task(id) });
   await promise; h.render();
 }
+
+test('preview options belong to the selected task and late old setters cannot leak', async () => {
+  const h = harness(); await seed(h); await select(h, 'A');
+  const old = h.props('VideoPreview');
+  old.onSubtitleStyleChange({ ...old.subtitleStyle, fontSize: 44 }); old.onShowSourceChange(false); h.render();
+  assert.equal(h.props('ControlPanel').subtitleStyle.fontSize, 44);
+  assert.equal(h.props('VideoPreview').showSource, false);
+  await select(h, 'B'); old.onShowSourceChange(false); h.render();
+  assert.equal(h.props('VideoPreview').showSource, true);
+  assert.equal(h.props('ControlPanel').subtitleStyle.fontSize, 18);
+});
 
 test('late A selection cannot replace B, including A to B to A', async () => {
   const h = harness(); await seed(h);

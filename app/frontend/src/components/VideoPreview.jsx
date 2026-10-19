@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 import ProgressBar from './ProgressBar';
 import SubtitleStyleControls from './SubtitleStyleControls';
-import { findSubtitleOverlaps, parseSubtitleTime } from '../utils/subtitleTiming';
+import { parseSubtitleTime } from '../utils/subtitleTiming';
 import { subtitlePreviewLayout } from '../utils/subtitlePreviewLayout';
+import { buildSubtitleDisplay, placeSubtitleBlocks, subtitleBlocksAt } from '../utils/subtitleDisplay';
 import { subtitleReviewRows } from '../utils/subtitleReview';
 import { transcriptionReview } from '../utils/transcriptionReview';
 import { dubbingReviewView, dubbingIssueMessage } from '../utils/dubbingReview';
@@ -69,14 +70,15 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const { t, lang: uiLang } = useI18n();
   const videoRef = useRef(null);
   const wrapperRef = useRef(null);
-  const subtitleRef = useRef(null);
+  const measurementRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sourceSegments, setSourceSegments] = useState([]);
   const [targetSegments, setTargetSegments] = useState([]);
   const [targetReview, setTargetReview] = useState(null);
   const [pendingReviewRow, setPendingReviewRow] = useState(null);
-  const [subSource, setSubSource] = useState('');
-  const [subTarget, setSubTarget] = useState('');
+  const [displayTime, setDisplayTime] = useState(0);
+  const [measurements, setMeasurements] = useState(null);
+  const [fontRevision, setFontRevision] = useState(0);
   const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' }
   const [editValue, setEditValue] = useState('');
   const [editStart, setEditStart] = useState('');
@@ -130,8 +132,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     setPreviewLang(defaultLang);
     setSourceSegments([]);
     setTargetSegments([]);
-    setSubSource('');
-    setSubTarget('');
+    setDisplayTime(0);
     setEditingCell(null);
   }, [task?.task_id]);
 
@@ -284,12 +285,13 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   }, [subtitleCollapsed, pendingReviewRow, sourceSegments, targetSegments]);
 
   const handleTimeUpdate = () => {
-    const time = videoRef.current?.currentTime || 0;
-    const src = sourceSegments.find(s => time >= s.start && time <= s.end);
-    const tgt = targetSegments.find(s => time >= s.start && time <= s.end);
-    setSubSource(src ? src.text : '');
-    setSubTarget(tgt ? tgt.text : '');
+    setDisplayTime(videoRef.current?.currentTime || 0);
   };
+
+  const displayEvents = useMemo(() => buildSubtitleDisplay([
+    ...(showSource ? [{ role: 'source', segments: sourceSegments }] : []),
+    ...(showTarget ? [{ role: 'target', segments: targetSegments }] : []),
+  ]), [sourceSegments, targetSegments, showSource, showTarget]);
 
   const seekTo = (time) => {
     if (videoRef.current) {
@@ -376,6 +378,40 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
   const cancelEdit = () => setEditingCell(null);
 
+  const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
+  const metricScope = useMemo(() => ({}), [displayEvents, previewLayout.imageWidth, previewLayout.fontSize, bold, fontFamily, fontRevision, task?.task_id]);
+  useEffect(() => {
+    let cancelled = false;
+    const update = () => { if (!cancelled) setFontRevision(value => value + 1); };
+    document.fonts?.ready.then(update);
+    document.fonts?.addEventListener('loadingdone', update);
+    return () => { cancelled = true; document.fonts?.removeEventListener('loadingdone', update); };
+  }, []);
+  useLayoutEffect(() => {
+    const container = measurementRef.current;
+    if (!container || !previewLayout.imageWidth) return;
+    const measure = () => {
+      const heights = Object.fromEntries([...container.children].map(node => [node.dataset.blockId, Math.max(1, Math.ceil(node.getBoundingClientRect().height) + 2)]));
+      setMeasurements(previous => previous?.scope === metricScope && JSON.stringify(previous.heights) === JSON.stringify(heights) ? previous : { scope: metricScope, heights });
+    };
+    const observer = new ResizeObserver(measure);
+    [...container.children].forEach(node => observer.observe(node));
+    measure();
+    return () => observer.disconnect();
+  }, [metricScope]);
+  const placedBlocks = useMemo(() => measurements?.scope === metricScope
+    ? placeSubtitleBlocks(displayEvents.blocks, measurements.heights, 2 * previewLayout.imageWidth / 640) : [],
+    [metricScope, measurements, displayEvents, previewLayout.imageWidth]);
+  const displayBlocks = subtitleBlocksAt(placedBlocks, displayTime);
+  const imageHeight = previewLayout.imageWidth * videoGeometry.videoHeight / videoGeometry.videoWidth;
+  const availableHeight = imageHeight - 80 * imageHeight / videoGeometry.videoHeight - (subtitleOffsetY || 0) * previewLayout.imageWidth / 640;
+  // Warn about genuinely undisplayable rows, not ordinary temporal overlap.
+  const displayIssueRows = new Set([...displayEvents.invalidRows,
+    ...placedBlocks.filter(block => block.bottom + block.height > availableHeight + 1).map(block => block.row)]);
+  const renderParts = block => block.parts.map(line => <div key={line.track} data-subtitle-role={line.role} data-subtitle-row={block.row}
+    className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`}
+    style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1.15, color: line.role === 'source' ? sourceColor || '#FFFFFF' : targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{line.text}</div>);
+
   if (!task) {
     return (
       <section className="app-panel app-preview-empty"><span className="app-step">02</span><div className="app-preview-glyph">▶</div><h2>{t('videoPreview')}</h2><p>{t('selectTaskToPreview')}</p></section>
@@ -387,11 +423,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const reviewRows = new Set(subtitleReviewRows(activeReview.rows, targetSegments.length));
   const dubbingReview = dubbingReviewView(task?.dubbing_review, previewLang || task?.target_lang, sourceSegments.length);
   const dubbingRows = new Set(dubbingReview.rows);
-  const overlapPairs = findSubtitleOverlaps(sourceSegments);
-  const overlapRows = new Set(overlapPairs.flat());
   const asrHints = transcriptionReview(sourceSegments, videoGeometry.duration);
   const asrRows = new Map(asrHints.map(hint => [hint.row, hint.reason]));
-  const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
   const isProcessing = !['transcribed', 'completed', 'failed', 'translation_failed', 'cancelled'].includes(task.status);
 
   return (
@@ -403,7 +436,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           webkit-playsinline="true"
           preload="metadata"
           src={task.video_url || `/video/${encodeURIComponent(task.filename)}`}
-          onTimeUpdate={handleTimeUpdate}></video>
+          onTimeUpdate={handleTimeUpdate} onSeeked={handleTimeUpdate}></video>
         {isIOSFullscreen && (
           <button
             onClick={() => setIsIOSFullscreen(false)}
@@ -431,12 +464,15 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           )}
         </button>
         <div
-          ref={subtitleRef}
           className="absolute left-1/2 z-[9999] -translate-x-1/2 text-center pointer-events-none break-words"
-          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth * 0.9}px` }}
+          data-subtitle-overlay
+          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth * 0.9}px`, height: 0 }}
         >
-          {showSource && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, marginBottom: showTarget ? `${previewLayout.lineGap}px` : 0, color: sourceColor || '#FFFFFF', fontFamily: fontFamily || 'Arial' }}>{subSource}</div>}
-          {showTarget && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, color: targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{subTarget}</div>}
+          {displayBlocks.map(block => <div key={block.id} data-subtitle-block={block.id} style={{ position: 'absolute', width: '100%', bottom: block.bottom }}>{renderParts(block)}</div>)}
+        </div>
+        <div ref={measurementRef} aria-hidden="true" className="absolute text-center pointer-events-none break-words"
+          style={{ visibility: 'hidden', height: 0, overflow: 'hidden', width: `${previewLayout.imageWidth * 0.9}px` }}>
+          {displayEvents.blocks.map(block => <div key={block.id} data-block-id={block.id}>{renderParts(block)}</div>)}
         </div>
       </div>
 
@@ -476,9 +512,9 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           <p>{t('asrReviewNotice')}</p>
           <div className="mt-2 flex flex-wrap gap-2">{asrHints.map(({ row, reason }) => <button key={row} type="button" title={t(reason)} className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>
         </div>}
-        {overlapPairs.length > 0 && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
-          <p>{t('subtitleOverlapNotice')}</p>
-          <div className="mt-2 flex flex-wrap gap-2">{overlapPairs.map(([first, second]) => <button key={`${first}-${second}`} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(first)}>#{first}–#{second}</button>)}</div>
+        {displayIssueRows.size > 0 && <div role="note" data-subtitle-overflow className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t('subtitleOverflowNotice')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">{[...displayIssueRows].sort((a, b) => a - b).map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>
         </div>}
         {(reviewRows.size > 0 || activeReview.check_incomplete) && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t('alignmentReviewNotice')}</p>
@@ -518,8 +554,8 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const isEditingTime = editingCell?.index === i && editingCell?.field === 'time';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={[dubbingRows.has(i + 1) ? t('dubbingSyncRow') : '', asrRows.has(i + 1) ? t(asrRows.get(i + 1)) : '', overlapRows.has(i + 1) ? t('subtitleOverlapRow') : '', reviewRows.has(i + 1) ? t('alignmentReviewRow') : ''].filter(Boolean).join(' · ') || undefined}
-                    className={`${dubbingRows.has(i + 1) ? 'bg-rose-100/80 dark:bg-rose-900/30' : asrRows.has(i + 1) || overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
+                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={[dubbingRows.has(i + 1) ? t('dubbingSyncRow') : '', asrRows.has(i + 1) ? t(asrRows.get(i + 1)) : '', displayIssueRows.has(i + 1) ? t('subtitleOverflowNotice') : '', reviewRows.has(i + 1) ? t('alignmentReviewRow') : ''].filter(Boolean).join(' · ') || undefined}
+                    className={`${dubbingRows.has(i + 1) ? 'bg-rose-100/80 dark:bg-rose-900/30' : asrRows.has(i + 1) || displayIssueRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       <span className="text-xs text-slate-400">#{i + 1}</span>
                       {isEditingTime ? <div className="flex flex-col gap-1">

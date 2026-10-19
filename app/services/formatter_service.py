@@ -4,6 +4,8 @@ from typing import List, Optional
 
 from app.core.config import settings
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
+from app.services.subtitle_display import subtitle_display_blocks, place_subtitle_blocks, ass_display_timestamp, escape_ass_text
+from app.services.subtitle_measurement import measure_subtitle_blocks, overlapping_block_ids
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +177,8 @@ class SubtitleFormatter:
         font_name = font_family or getattr(s, 'ASS_FONT_NAME', 'Arial')
         logger.info(f"to_ass params: PlayResX={playres_x}, PlayResY={playres_y}, scale={scale:.2f}, margin_lr={margin_lr}, orig_font={orig_font}, trans_font={trans_font}, target_width={target_width}, bold={bold_val}, font={font_name}, font_size_input={font_size}")
 
-        # Anchor one subtitle block to the bottom, with source above target.
-        # libass wraps it using actual font metrics within the style margins.
+        # Keep each source/target row block stable; newer blocks avoid its real
+        # rendered height instead of pushing existing subtitles upward.
         center_x = playres_x // 2
         # The preview uses the same 640-unit horizontal reference as font size.
         offset_px = margin_v * scale
@@ -199,24 +201,33 @@ class SubtitleFormatter:
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
         ]
 
-        for i, seg in enumerate(result.segments):
-            start = self._format_timestamp(seg.start, "ass")
-            end = self._format_timestamp(seg.end, "ass")
-            blocks = []
-            if show_source and original_result and i < len(original_result.segments):
-                text = " ".join(original_result.segments[i].text.split())
-                blocks.append(f"{{\\fs{orig_font}\\c{orig_color}}}{text}")
-            if show_target:
-                target_texts = [seg.text]
-                if extra_results:
-                    target_texts.extend(er.segments[i].text for er in extra_results if i < len(er.segments))
-                for text in target_texts:
-                    text = " ".join(text.split())
-                    blocks.append(f"{{\\fs{trans_font}\\c{trans_color}}}{text}")
-            if blocks:
-                style = "Translated" if show_target else "Original"
-                positioned = f"{{\\an2\\pos({center_x},{bottom_y})}}" + r"\N".join(blocks)
-                lines.append(f"Dialogue: 0,{start},{end},{style},,0,0,0,,{positioned}")
+        tracks = []
+        if show_source and original_result:
+            tracks.append({'role': 'source', 'segments': [row.model_dump() for row in original_result.segments]})
+        if show_target:
+            tracks.extend({'role': 'target', 'segments': [row.model_dump() for row in document.segments]}
+                          for document in (result, *(extra_results or [])))
+        display = subtitle_display_blocks(tracks)
+        texts = {}
+        for block in display['blocks']:
+            parts = []
+            for line in block['parts']:
+                size, color = (orig_font, orig_color) if line['role'] == 'source' else (trans_font, trans_color)
+                parts.append(f"{{\\fs{size}\\c{color}}}{escape_ass_text(line['text'])}")
+            texts[block['id']] = r'\N'.join(parts)
+        overlap_ids = overlapping_block_ids(display['blocks'])
+        heights = {block['id']: 1 for block in display['blocks']}
+        heights.update(measure_subtitle_blocks('\n'.join(lines),
+            [block for block in display['blocks'] if block['id'] in overlap_ids], texts,
+            playres_x, max(orig_font, trans_font)))
+        for block in place_subtitle_blocks(display['blocks'], heights, 2 * scale):
+            start, end = ass_display_timestamp(block['start']), ass_display_timestamp(block['end'])
+            style = 'Translated' if show_target else 'Original'
+            y = bottom_y - block['bottom']
+            positioned = f"{{\\an2\\pos({center_x},{y:g})}}" + texts[block['id']]
+            lines.append(f"Dialogue: 0,{start},{end},{style},,0,0,0,,{positioned}")
+            if block['id'] in overlap_ids and y - block['height'] < 0:
+                logger.warning('Subtitle row %s extends above the video; reduce font size or review timing', block['row'])
 
         dialogue_lines = [l for l in lines if l.startswith("Dialogue:")]
         logger.info(f"to_ass generated {len(dialogue_lines)} dialogue lines. bottom_y={bottom_y}")

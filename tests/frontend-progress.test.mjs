@@ -18,7 +18,11 @@ test('current-stage progress follows dubbing and rendering events', () => {
   assert.equal(stageProgressForEvent({ status: 'pipeline_dubbing', progress_percent: 75 }), 0);
   assert.equal(stageProgressForEvent({ status: 'dubbing', message: '正在合成语音 38/112...', progress: 27 }), 27);
   assert.equal(stageProgressForEvent({ status: 'dubbing', message: '正在合成语音 70/112...', progress: 45 }, 27), 45);
-  assert.equal(stageProgressForEvent({ status: 'dubbing', progress_percent: 75 }, 45), 45);
+  // Standalone workers publish stage progress in progress_percent; pipeline_*
+  // events above still carry overall milestones and must reset the stage.
+  assert.equal(stageProgressForEvent({ status: 'dubbing', progress_percent: 75 }, 45), 75);
+  assert.equal(stageProgressForEvent({ status: 'dubbing', progress: 0, progress_percent: 75 }, 45), 0);
+  assert.equal(stageProgressForEvent({ status: 'dubbing' }, 45), 45);
   assert.equal(stageProgressForEvent({ status: 'pipeline_rendering', progress_percent: 90 }, 100), 0);
   assert.equal(stageProgressForEvent({ status: 'burning', progress: 68 }), 68);
   assert.equal(stageProgressForEvent({ status: 'translating', progress_percent: 51 }), 51);
@@ -29,7 +33,7 @@ test('live speech and translation progress localize in English', () => {
   assert.equal(localizedTaskMessage({ status: 'dubbing', message: '正在合成语音 3/16' }, en), 'Synthesizing speech 3/16...');
   assert.equal(localizedTaskMessage({ status: 'dubbing', message: '正在对齐时间轴' }, en), 'Aligning the audio timeline...');
   assert.equal(localizedTaskMessage({ status: 'translating', message: '3/16' }, en), 'Translating batch 3/16...');
-  assert.equal(localizedTaskMessage({ status: 'pipeline_rendering', pipeline_stage: 'pipeline_rendering' }, en), 'Rendering the final video...');
+  assert.equal(localizedTaskMessage({ status: 'pipeline_rendering', pipeline_stage: 'pipeline_rendering' }, en), en('pipeline_rendering'));
 });
 
 test('color controls use borderless inner swatches', () => {

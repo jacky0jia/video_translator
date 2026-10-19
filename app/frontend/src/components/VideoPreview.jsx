@@ -9,6 +9,7 @@ import { buildSubtitleDisplay, placeSubtitleBlocks, subtitleBlocksAt } from '../
 import { subtitleReviewRows } from '../utils/subtitleReview';
 import { transcriptionReview } from '../utils/transcriptionReview';
 import { dubbingReviewView, dubbingIssueMessage } from '../utils/dubbingReview';
+import { useSubtitleDocument } from '../hooks/useSubtitleDocument';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -72,14 +73,11 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const wrapperRef = useRef(null);
   const measurementRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [sourceSegments, setSourceSegments] = useState([]);
-  const [targetSegments, setTargetSegments] = useState([]);
-  const [targetReview, setTargetReview] = useState(null);
   const [pendingReviewRow, setPendingReviewRow] = useState(null);
   const [displayTime, setDisplayTime] = useState(0);
   const [measurements, setMeasurements] = useState(null);
   const [fontRevision, setFontRevision] = useState(0);
-  const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' }
+  const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' | 'time' }
   const [editValue, setEditValue] = useState('');
   const [editStart, setEditStart] = useState('');
   const [editEnd, setEditEnd] = useState('');
@@ -90,6 +88,17 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const [videoGeometry, setVideoGeometry] = useState({ containerWidth: 0, containerHeight: 0, videoWidth: 0, videoHeight: 0 });
 
   const { offsetY: subtitleOffsetY, fontSize: subtitleFontSize, sourceColor, targetColor, bold, fontFamily } = subtitleStyle || {};
+  const sourceDocument = useSubtitleDocument(task?.task_id, task?.transcription_path, task);
+  const targetPath = previewLang && task?.translations?.[previewLang] ? task.translations[previewLang] : task?.translation_path;
+  const targetDocument = useSubtitleDocument(task?.task_id, targetPath, task);
+  const { segments: sourceSegments, setSegments: setSourceSegments } = sourceDocument;
+  const { segments: targetSegments, setSegments: setTargetSegments } = targetDocument;
+  const targetData = targetDocument.data;
+  const targetReview = Array.isArray(targetData?.alignment_review_rows) ? {
+    rows: targetData.alignment_review_rows, check_incomplete: targetData.alignment_check_incomplete,
+  } : null;
+  // An editor belongs to one document; never carry its draft into another track.
+  useEffect(() => { setEditingCell(null); }, [task?.task_id, task?.transcription_path, targetPath]);
 
   useEffect(() => {
     fetch('/api/fonts')
@@ -130,8 +139,6 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       defaultLang = transKeys[0];
     }
     setPreviewLang(defaultLang);
-    setSourceSegments([]);
-    setTargetSegments([]);
     setDisplayTime(0);
     setEditingCell(null);
   }, [task?.task_id]);
@@ -228,47 +235,6 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     onPreviewLangChange?.(previewLang);
   }, [previewLang, onPreviewLangChange]);
 
-  // Load segments when task or previewLang changes
-  useEffect(() => {
-    if (!task) return;
-    let cancelled = false;
-    setTargetReview(null);
-    setTargetSegments([]);
-    async function load() {
-      if (task.transcription_path) {
-        try {
-          const res = await fetch(task.transcription_path, { cache: 'no-store' });
-          const data = await res.json();
-          if (!cancelled) setSourceSegments(data.segments || []);
-        } catch (e) {
-          console.error('Failed to load source segments:', e);
-        }
-      }
-      const transPath = previewLang && task.translations?.[previewLang]
-        ? task.translations[previewLang]
-        : task.translation_path;
-      if (transPath) {
-        try {
-          const res = await fetch(transPath, { cache: 'no-store' });
-          const data = await res.json();
-          if (!cancelled) {
-            setTargetSegments(data.segments || []);
-            setTargetReview(Array.isArray(data.alignment_review_rows) ? {
-              rows: data.alignment_review_rows, check_incomplete: data.alignment_check_incomplete,
-            } : null);
-          }
-        } catch (e) {
-          console.error('Failed to load target segments:', e);
-          if (!cancelled) setTargetSegments([]);
-        }
-      } else {
-        setTargetSegments([]);
-      }
-    }
-    load();
-    return () => { cancelled = true; };
-  }, [task, previewLang]);
-
   const jumpToSubtitleRow = row => {
     setSubtitleCollapsed(false);
     setPendingReviewRow(row);
@@ -301,6 +267,12 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   };
 
   const startEdit = (index, field) => {
+    if ((field !== 'target' && sourceDocument.status !== 'ready')
+      || (field === 'target' && targetDocument.status !== 'ready')
+      || (field === 'time' && !['ready', 'missing'].includes(targetDocument.status))) {
+      showToast(t('subtitleLoadReadOnly'), 'error');
+      return;
+    }
     if (field === 'time') {
       const segment = sourceSegments[index];
       if (!segment) return;
@@ -319,6 +291,12 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const saveEdit = useCallback(async () => {
     if (!task || !editingCell) return;
     const { index, field } = editingCell;
+    if ((field !== 'target' && sourceDocument.status !== 'ready')
+      || (field === 'target' && targetDocument.status !== 'ready')
+      || (field === 'time' && !['ready', 'missing'].includes(targetDocument.status))) {
+      showToast(t('subtitleLoadReadOnly'), 'error');
+      return;
+    }
     const payload = {};
     if (field === 'source' && sourceSegments[index]?.text !== editValue) {
       payload.source_text = editValue;
@@ -374,7 +352,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       const err = await res.json().catch(() => ({}));
       showToast(t('save') + ' ' + (err.detail || t('unknownError')), 'error');
     }
-  }, [task, editingCell, editValue, editStart, editEnd, sourceSegments, targetSegments, t, showToast, onTaskRefresh]);
+  }, [task, editingCell, editValue, editStart, editEnd, sourceSegments, targetSegments, sourceDocument.status, targetDocument.status, setSourceSegments, setTargetSegments, t, showToast, onTaskRefresh]);
 
   const cancelEdit = () => setEditingCell(null);
 
@@ -501,6 +479,11 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">
+        {[['source', sourceDocument], ['target', targetDocument]].filter(([, document]) => document.status === 'error').map(([track, document]) => <div key={track} role="alert" data-subtitle-load-error={track} className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t(track === 'source' ? 'sourceSubtitleLoadFailed' : 'targetSubtitleLoadFailed')}</p>
+          <p className="mt-1 text-xs">{t('subtitleLoadReadOnly')}</p>
+          <button type="button" onClick={document.reload} className="mt-2 underline">{t('retrySubtitleLoad')}</button>
+        </div>)}
         {dubbingReview.active && <div role="note" data-testid="dubbing-sync-notice" className="mb-3 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-950 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100">
           <p>{t('dubbingSyncNotice')}</p>
           {task.dubbing_review.needs_recheck && <p className="mt-1">{t('dubbingSyncRecheck')}</p>}

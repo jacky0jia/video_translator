@@ -200,7 +200,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   // Track fullscreen state to keep subtitles visible
   useEffect(() => {
     const handleChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      setIsFullscreen(Boolean(wrapperRef.current && document.fullscreenElement === wrapperRef.current));
     };
     document.addEventListener('fullscreenchange', handleChange);
     return () => {
@@ -409,7 +409,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     <section className="app-panel p-4">
       <div className="app-panel-heading"><span className="app-step">02</span><div><h2>{t('videoPreview')}</h2><p>{t('previewPanelHint')}</p></div></div>
       <div ref={wrapperRef} className={`bg-black overflow-hidden ${isIOSFullscreen ? 'fixed inset-0 z-50 flex items-center justify-center rounded-none' : 'relative rounded-lg group'}`}>
-        <video ref={videoRef} className={`block ${isIOSFullscreen ? 'w-full h-full object-contain' : 'w-full'}`} controls controlsList="nofullscreen"
+        <video ref={videoRef} className={`block ${isFullscreen || isIOSFullscreen ? 'w-full h-full object-contain' : 'w-full'}`} controls controlsList="nofullscreen"
           playsInline
           webkit-playsinline="true"
           preload="metadata"

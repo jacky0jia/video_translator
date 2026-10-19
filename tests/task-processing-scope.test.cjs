@@ -115,6 +115,7 @@ function harness(initialTask, { automaticVoices = true, automaticSave = true } =
     get view() { return view; }, get stateWrites() { return stateWrites; },
     changeLanguage() { t = key => `localized:${key}`; render(); },
     event: data => stream.callback(data),
+    captureEventHandler: () => stream.callback,
     unmount: () => cells.forEach(cell => cell?.cleanup?.()),
     replayEffects() { cells.forEach(cell => { if (cell?.fn) { cell.cleanup?.(); cell.cleanup = cell.fn(); } }); },
   };
@@ -273,6 +274,68 @@ for (const ok of [true, false]) test(`old subtitle translation/export ${ok ? 'su
   // selection moved to B. It must never auto-export or auto-approve.
   assert.equal(h.requests.filter(request => request.url === '/api/export').length, 0);
   await pending; await h.settle();
+  assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
+});
+
+for (const terminal of ['completed', 'failed', 'translation_failed', 'cancelled']) test(`restored subtitle workflow consumes ${terminal} snapshot`, async () => {
+  const active = task('A', { status: 'burning', last_process_route: 'subtitles',
+    last_burn_enabled: true, burn_status: 'processing', pipeline_status: null, state_revision: 1, progress_percent: 55 });
+  const h = await ready(active);
+  assert.equal(h.view.running, true);
+  const finish = { status: terminal, burn_status: terminal === 'translation_failed' ? null : terminal,
+    pipeline_status: null, state_revision: 2, progress_percent: terminal === 'completed' ? 100 : 55,
+    failed_stage: terminal.includes('failed') ? 'burning' : null, message: terminal.includes('failed') ? 'Render failed' : terminal };
+  h.event(finish);
+  await h.settle();
+  assert.equal(h.view.running, false);
+  // Completion is only displayed after refreshed artifact metadata confirms
+  // the render exists; the event alone must not fabricate output paths.
+  h.render({ ...active, ...finish, burn_path: terminal === 'completed' ? '/static/output/new.mp4' : undefined }); await h.settle();
+  assert.equal(h.view.status, terminal === 'translation_failed' ? 'failed' : terminal);
+  assert.equal(h.view.progress, terminal === 'completed' ? 100 : 55);
+  assert.equal(h.view.currentStage, terminal.includes('failed') ? 'render' : '');
+  assert.deepEqual(h.refreshes, ['A']);
+  assert.equal(h.requests.length, 0);
+  h.unmount();
+});
+
+test('restored burn failure can retry rendering without retranslating', async () => {
+  const h = await ready(task('A', { status: 'burning', last_process_route: 'subtitles',
+    last_burn_enabled: true, burn_status: 'processing', pipeline_status: null, state_revision: 1 }));
+  h.event({ status: 'failed', burn_status: 'failed', pipeline_status: null, failed_stage: 'burning',
+    state_revision: 2, burn_error: 'Encoder failed', message: 'Encoder failed' }); await h.settle();
+  assert.equal(h.view.message, 'Encoder failed');
+  const pending = h.view.retryFailedStage(); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/video-plan');
+  h.requests.at(-1).respond({ plan: {} }); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/translation-review');
+  h.requests.at(-1).respond({ approved: true }); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/export'); h.requests.at(-1).respond({}); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/burn'); h.requests.at(-1).respond({ status: 'started' }); await h.settle();
+  h.tick(900); await h.settle(); h.requests.at(-1).respond({ burn_status: 'completed' }); await pending;
+  assert.equal(h.requests.some(r => r.url === '/api/translate' || r.url === '/api/pipeline'), false);
+});
+
+test('subtitle terminal-looking snapshot cannot finish a still-active render', async () => {
+  const h = await ready(task('A', { status: 'burning', last_process_route: 'subtitles',
+    burn_status: 'processing', last_burn_enabled: true, pipeline_status: null, state_revision: 1 }));
+  h.event({ status: 'completed', burn_status: 'processing', pipeline_status: null, state_revision: 2 }); await h.settle();
+  assert.equal(h.view.running, true); assert.equal(h.refreshes.length, 0);
+});
+
+test('old completed snapshot during a local subtitle start cannot unlock it', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles', last_burn_enabled: true }));
+  const pending = h.view.run(); await h.settle();
+  h.event({ status: 'completed', pipeline_status: null, burn_status: 'completed' }); await h.settle();
+  assert.equal(h.view.running, true);
+  h.requests.at(-1).respond({ detail: 'Plan unavailable' }, false); await pending;
+});
+
+test('late restored burn completion cannot change the newly selected task', async () => {
+  const h = await ready(task('A', { status: 'burning', last_process_route: 'subtitles', burn_status: 'processing', pipeline_status: null }));
+  const oldHandler = h.captureEventHandler();
+  h.render(activeB()); await h.settle(); const before = snapshot(h);
+  oldHandler({ status: 'completed', burn_status: 'completed', pipeline_status: null }); await h.settle();
   assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
 });
 

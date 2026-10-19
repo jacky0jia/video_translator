@@ -316,6 +316,23 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
       return;
     }
     if (route === 'subtitles') {
+      // A restored page has no local HTTP/polling continuation to consume the
+      // result. Reconcile terminal SSE snapshots too, but never let an old
+      // snapshot unlock a locally starting workflow or a still-active worker.
+      if (!startRequestRef.current && ['completed', 'failed', 'translation_failed', 'cancelled'].includes(event.status)) {
+        const restored = deriveTaskProcessingState({ ...event,
+          progress_percent: event.progress_percent ?? event.progress ?? progress,
+          message: event.burn_error || event.message,
+        }, t);
+        if (!restored.running) {
+          setRunning(false); setStatus(restored.status); setProgress(restored.progress);
+          setCurrentStage(restored.status === 'failed' ? restored.currentStage || currentStage : '');
+          setMessage(restored.message);
+          if (restored.status === 'failed') setLastFailedStage(event.failed_stage || event.pipeline_stage || currentStage || event.status);
+          refresh().catch(() => {});
+          return;
+        }
+      }
       if (!['translating', 'burning'].includes(event.status)) return;
       setProgress(value => stageProgressForEvent(event, value));
       setCurrentStage(event.status === 'burning' ? 'render' : 'translate');

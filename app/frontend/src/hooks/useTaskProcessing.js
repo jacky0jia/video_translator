@@ -82,7 +82,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
   }, [task?.task_id]);
 
   useEffect(() => {
-    if (!task?.task_id || route !== 'dubbing' || running) return;
+    if (!task?.task_id || (route !== 'dubbing' && !burn) || running) return;
     const controller = new AbortController();
     setVideoPlanLoading(true);
     setVideoPlanError('');
@@ -434,6 +434,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
           style: subtitleStyle,
           target_lang: targetLang,
           end_note_enabled: endNoteEnabled,
+          output_options: videoOutput,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -505,7 +506,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
         error.httpStatus = saved.status;
         throw error;
       }
-      if (route === 'dubbing') {
+      if (route === 'dubbing' || burn) {
         // Validate and probe before expensive translation/synthesis, even if the
         // folded preview has not finished loading yet.
         const response = await fetch(`/api/tasks/${task.task_id}/video-plan`, {
@@ -516,6 +517,8 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
         if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : t('videoInvalidOptions'));
         setVideoPlan(data);
         setVideoPlanLoading(false);
+      }
+      if (route === 'dubbing') {
         await startDubbing({ forceTranslate, forceDub, reviewId });
         refresh().catch(() => {});
         return;

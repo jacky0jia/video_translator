@@ -13,6 +13,7 @@ function OutputOptions({ processing }) {
     <label className="block"><span className="app-field-label">{t('subtitleContent')}</span><select className="app-input w-full" value={subtitleContent} onChange={e => setSubtitleContent(e.target.value)} disabled={running}><option value="translated">{t('translationOnly')}</option><option value="bilingual">{t('sourceAndTranslation')}</option></select></label>
     <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700"><span><strong className="block text-sm font-medium">{t('burnIntoVideo')}</strong><span className="text-xs text-slate-500 dark:text-slate-400">{t('burnIntoVideoHint')}</span></span><input type="checkbox" className="app-switch" checked={burn} onChange={e => setBurn(e.target.checked)} disabled={running} /></label>
     {burn && <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700"><span><strong className="block text-sm font-medium">{t('endNote')}</strong><span className="text-xs text-slate-500 dark:text-slate-400">{t('endNoteHint')}</span></span><input type="checkbox" className="app-switch" checked={endNoteEnabled} onChange={e => setEndNoteEnabled(e.target.checked)} disabled={running} /></label>}
+    {burn && <VideoOutputOptions processing={processing} />}
     <p className="app-note">{format === 'ass' ? t('assStyleNote') : `${format.toUpperCase()} ${t('timedTextStyleNote')}`}</p>
   </>;
   return <>

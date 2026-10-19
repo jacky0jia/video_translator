@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.core.history import history_manager
 from app.core.events import emit_event
 from app.services.video_burn_service import video_burn_service
+from app.services.video_output import VideoOutputOptions
 from app.services.pipeline_service import pipeline_service
 from app.services.translation_review_service import TranslationReviewService, translation_busy
 
@@ -21,11 +22,14 @@ class BurnRequest(BaseModel):
     style: Optional[dict] = None
     target_lang: Optional[str] = None
     end_note_enabled: bool = True
+    # Omission keeps the legacy source-codec path for existing clients.
+    output_options: Optional[VideoOutputOptions] = None
 
 
-def _run_burn_task(task_id: str, show_source: bool, show_target: bool, style: Optional[dict], target_lang: Optional[str], end_note_enabled: bool):
+def _run_burn_task(task_id: str, show_source: bool, show_target: bool, style: Optional[dict], target_lang: Optional[str], end_note_enabled: bool, output_options: Optional[dict] = None):
     try:
-        video_burn_service.burn(task_id, show_source, show_target, style or {}, target_lang, end_note_enabled=end_note_enabled)
+        video_burn_service.burn(task_id, show_source, show_target, style or {}, target_lang,
+                                end_note_enabled=end_note_enabled, output_options=output_options)
         data = {"status": "completed", "burn_status": "completed", "progress_percent": 100,
                 "message": "completed", "failed_stage": None}
         history_manager.update_task(task_id, data)
@@ -73,6 +77,9 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
             "failed_stage": None, "cancelled_stage": None,
             "last_process_route": "subtitles", "last_burn_enabled": True,
             "last_end_note_enabled": request.end_note_enabled}
+    output_options = request.output_options.model_dump() if request.output_options is not None else None
+    if output_options is not None:
+        data['video_output_options'] = output_options
     history_manager.update_task(request.task_id, data)
     emit_event(request.task_id, data)
 
@@ -84,6 +91,7 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
         request.style,
         request.target_lang,
         request.end_note_enabled,
+        output_options,
     )
 
     return {"status": "started", "task_id": request.task_id}

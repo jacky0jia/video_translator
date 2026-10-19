@@ -276,10 +276,53 @@ for (const ok of [true, false]) test(`old subtitle translation/export ${ok ? 'su
   assert.equal(snapshot(h), before); assert.equal(h.toasts.length, 0);
 });
 
+test('subtitle burn previews the selected strategy without starting work', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles' }));
+  h.view.setBurn(true); h.view.setVideoOutput({ policy: 'custom', codec: 'h264', resolution: '1080', bitrate_mbps: 7.5 }); h.render();
+  h.tick(250); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/video-plan');
+  const body = JSON.parse(h.requests.at(-1).options.body);
+  assert.equal(body.output_options.bitrate_mbps, 7.5);
+  assert.equal(body.burn_subtitles, true);
+  assert.equal(h.saves.length, 0);
+});
+
+test('subtitle burn preflights and forwards choices to the standalone renderer', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles' }));
+  const choices = { policy: 'custom', codec: 'h264', resolution: '1080', bitrate_mbps: 7.5 };
+  h.view.setBurn(true); h.view.setVideoOutput(choices); h.render();
+  const pending = h.view.run(); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/video-plan');
+  assert.deepEqual(JSON.parse(h.requests.at(-1).options.body).output_options, choices);
+  h.requests.at(-1).respond({ plan: { codec: 'h264' } }); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/translation-review');
+  h.requests.at(-1).respond({ approved: true }); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/export'); h.requests.at(-1).respond({}); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/burn');
+  assert.deepEqual(JSON.parse(h.requests.at(-1).options.body).output_options, choices);
+  h.requests.at(-1).respond({ status: 'started' }); await h.settle();
+  h.tick(900); await h.settle(); h.requests.at(-1).respond({ burn_status: 'completed' });
+  await pending; await h.settle();
+  assert.equal(h.view.running, false);
+  assert.equal(h.requests.some(request => request.url === '/api/pipeline' || request.url === '/api/translate'), false);
+});
+
+test('unavailable burn plan stops before translation or export', async () => {
+  const h = await ready(task('A', { last_process_route: 'subtitles', translations: {} }));
+  h.view.setBurn(true); h.render();
+  const pending = h.view.run(); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/video-plan');
+  h.requests.at(-1).respond({ detail: 'Encoder unavailable' }, false); await pending; await h.settle();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.view.status, 'failed');
+});
+
 for (const burnStatus of ['completed', 'failed']) test(`old burn polling ${burnStatus} cannot alter B`, async () => {
   const h = await ready(task('A', { last_process_route: 'subtitles' }));
   h.view.setBurn(true); h.render();
   const pending = h.view.run(); await h.settle();
+  assert.equal(h.requests.at(-1).url, '/api/tasks/A/video-plan');
+  h.requests.at(-1).respond({ plan: {} }); await h.settle();
   assert.equal(h.requests.at(-1).url, '/api/tasks/A/translation-review');
   h.requests.at(-1).respond({ approved: true }); await h.settle();
   assert.equal(h.requests.at(-1).url, '/api/export'); h.requests.at(-1).respond({}); await h.settle();

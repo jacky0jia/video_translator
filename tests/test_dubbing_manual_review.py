@@ -62,8 +62,9 @@ def test_exhausted_compression_recovers_through_edits_and_remeasurement(manual_c
             if len(calls) == 2:
                 raise DubbingCompressionRequired("still long", [3], issues=[issue([3], 0.5)])
             video = tmp_path / "dubbed.mp4"
-            video.touch()
-            history.update_task(task_id, {"dubbing_video_path": str(video)})
+            video.write_bytes(b"fixture")
+            audio = video.with_suffix('.wav'); audio.write_bytes(b"fixture")
+            history.update_task(task_id, {"dubbing_video_path": str(video), "dubbing_audio_path": str(audio)})
         translator = AsyncMock()
         service = PipelineService(translate_stage=translator, dub_stage=dub)
         compact = AsyncMock()

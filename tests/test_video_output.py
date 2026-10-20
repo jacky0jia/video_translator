@@ -179,14 +179,15 @@ class VideoPlanApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_render_stage_gets_choices_and_reuses_existing_speech(self):
         from app.services.pipeline_service import PipelineService
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'existing'; path.touch()
+            path = Path(directory) / 'existing'; path.write_bytes(b'fixture')
             task = dict(task_id='one', transcription_path=str(path), translations={'Chinese': str(path)},
                         dubbing_status='completed', dubbing_target_lang='Chinese', dubbing_voice='voice',
                         dubbing_speed=1, dubbing_audio_path=str(path), dubbing_raw_video_path=str(path))
             history = Mock()
             history.get_task.return_value = task
             history.update_task.side_effect = lambda _, values: task.update(values)
-            burn, dub = AsyncMock(), AsyncMock()
+            burn = AsyncMock(side_effect=lambda *_args, **_kwargs: task.update(dubbing_video_path=str(path)))
+            dub = AsyncMock()
             options = {'policy': 'resolution'}
             with patch('app.services.pipeline_service.history_manager', history), patch('app.services.pipeline_service.emit_event'), patch.object(PipelineService, '_review_translation', return_value=False):
                 await PipelineService(burn_stage=burn, dub_stage=dub).run(

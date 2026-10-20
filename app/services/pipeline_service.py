@@ -110,13 +110,14 @@ class PipelineService:
         persisted = str((task or {}).get("message") or "").strip()
         return persisted or exc.__class__.__name__
 
-    @staticmethod
-    def _artifact_exists(value: str | None) -> bool:
-        if not value:
+    @classmethod
+    def _artifact_exists(cls, value: str | None) -> bool:
+        """Require a regular nonempty file, not merely an existing path."""
+        try:
+            path = cls._artifact_path(value)
+            return bool(path and path.is_file() and path.stat().st_size > 0)
+        except (OSError, ValueError):
             return False
-        if value.startswith("/static/output/"):
-            return (Path(settings.OUTPUT_DIR) / Path(unquote(value)).name).exists()
-        return Path(value).exists()
 
     @staticmethod
     def _artifact_path(value: str | None) -> Path | None:
@@ -324,8 +325,10 @@ class PipelineService:
             task = history_manager.get_task(task_id) or {}
             raw_video_value = task.get("dubbing_raw_video_path") or task.get("dubbing_video_path")
             raw_video = self._artifact_path(raw_video_value)
-            if not raw_video or not raw_video.exists():
-                raise RuntimeError("Dubbing did not produce a video output")
+            if not self._artifact_exists(raw_video_value):
+                raise RuntimeError("Dubbing did not produce a non-empty video output")
+            if not self._artifact_exists(task.get("dubbing_audio_path")):
+                raise RuntimeError("Dubbing did not produce a non-empty audio output")
 
             if burn_subtitles or end_note_enabled:
                 self._set_stage(task_id, "pipeline_rendering", "正在渲染最终视频...", 90)
@@ -353,6 +356,11 @@ class PipelineService:
                         "dubbing_end_note_enabled": False,
                     },
                 )
+
+            task = history_manager.get_task(task_id) or {}
+            for field, label in (("dubbing_audio_path", "audio"), ("dubbing_video_path", "video")):
+                if not self._artifact_exists(task.get(field)):
+                    raise RuntimeError(f"Pipeline did not produce a non-empty {label} output")
 
             data = {
                 "status": "completed", "pipeline_status": "completed",

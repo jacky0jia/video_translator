@@ -160,11 +160,13 @@ def test_cancelled_real_thread_cannot_publish_or_overlap_a_new_pipeline(owned_hi
         from app.services.video_burn_service import video_burn_service
         history, task_id = owned_history
         source = tmp_path / 'source.json'
-        source.touch()
+        source.write_bytes(b"fixture")
         raw = tmp_path / 'raw.mp4'
-        raw.touch()
+        raw.write_bytes(b"fixture")
+        audio = tmp_path / 'audio.wav'
+        audio.write_bytes(b"fixture")
         history.update_task(task_id, {'transcription_path': str(source), 'translations': {'Chinese': str(source)},
-                                     'dubbing_raw_video_path': str(raw)})
+                                     'dubbing_raw_video_path': str(raw), 'dubbing_audio_path': str(audio)})
         entered, release = asyncio.Event(), threading.Event()
         loop = asyncio.get_running_loop()
         queue = events._get_queue(task_id)
@@ -327,7 +329,7 @@ def test_dubbing_rechecks_pipeline_busy_after_voice_lookup(owned_history, tmp_pa
         from app.services.pipeline_service import pipeline_service
         history, task_id = owned_history
         source = tmp_path / 'source.mp4'
-        source.touch()
+        source.write_bytes(b"fixture")
         history.update_task(task_id, {'source_path': str(source), 'transcription_path': 'source.json'})
         monkeypatch.setattr(api, 'history_manager', history)
         monkeypatch.setattr(api, 'resolve_tts_route', lambda *_: SimpleNamespace(provider_id='qwen'))

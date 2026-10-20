@@ -27,7 +27,7 @@ def flow(tmp_path, monkeypatch):
     history = HistoryManager(tmp_path / "history.json")
     task_id = history.create_task("fixture.mp4", "local", target_lang="Chinese")
     source, target, video = tmp_path / "source.json", tmp_path / "target.json", tmp_path / "fixture.mp4"
-    video.touch()
+    video.write_bytes(b"fixture")
     for path, text, language in ((source, "Hello", "en"), (target, "你好", "Chinese")):
         path.write_text(TranscriptionResult(video_source="fixture.mp4", language=language, segments=[
             TranscriptionSegment(start=0, end=2, text=text, confidence=1),
@@ -56,8 +56,9 @@ def test_pipeline_waits_before_export_and_tts_then_resumes_edited_text(flow, mon
         async def dub(*_args):
             calls.append(json.loads(target.read_text(encoding="utf-8"))["segments"][0]["text"])
             video = tmp_path / "dubbed.mp4"
-            video.touch()
-            history.update_task(task_id, {"dubbing_video_path": str(video)})
+            video.write_bytes(b"fixture")
+            audio = video.with_suffix('.wav'); audio.write_bytes(b"fixture")
+            history.update_task(task_id, {"dubbing_video_path": str(video), "dubbing_audio_path": str(audio)})
 
         translator = AsyncMock()
         service = PipelineService(translate_stage=translator, export_stage=export, dub_stage=dub)
@@ -176,7 +177,8 @@ def test_fresh_asr_and_real_translation_api_stop_at_review_then_continue_once(fl
         async def asr(identifier, _task):
             history.update_task(identifier, {"transcription_path": str(source)})
         async def dub(identifier, *_args):
-            history.update_task(identifier, {"dubbing_video_path": video})
+            audio = source.with_suffix('.wav'); audio.write_bytes(b"fixture")
+            history.update_task(identifier, {"dubbing_video_path": video, "dubbing_audio_path": str(audio)})
         transcribe = AsyncMock(side_effect=asr)
         translate = AsyncMock(return_value=TranscriptionResult(
             video_source="fixture.mp4", language="Chinese", segments=[
@@ -267,8 +269,9 @@ def test_compression_requires_new_review_before_resynthesis(flow, monkeypatch, t
         async def dub(*args):
             calls.append("dub")
             video = tmp_path / "compact.mp4"
-            video.touch()
-            history.update_task(task_id, {"dubbing_video_path": str(video)})
+            video.write_bytes(b"fixture")
+            audio = video.with_suffix('.wav'); audio.write_bytes(b"fixture")
+            history.update_task(task_id, {"dubbing_video_path": str(video), "dubbing_audio_path": str(audio)})
 
         service = PipelineService(export_stage=AsyncMock(), dub_stage=dub)
         monkeypatch.setattr(service, "_compress_translation", compact)

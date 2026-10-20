@@ -26,7 +26,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_state_machine_runs_in_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "video.mp4"; source.touch()
+            source = root / "video.mp4"; source.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "source_path": str(source), "filename": source.name,
                 "failed_stage": "old", "cancelled_stage": "old",
@@ -35,19 +35,19 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
             async def transcribe(task_id, task):
                 order.append("asr")
-                path = root / "transcription.json"; path.touch()
+                path = root / "transcription.json"; path.write_bytes(b"fixture")
                 history.task["transcription_path"] = str(path)
 
             async def translate(task_id, language):
                 order.append("translation")
-                path = root / "translation.json"; path.touch()
+                path = root / "translation.json"; path.write_bytes(b"fixture")
                 history.task["translations"] = {language: str(path)}
                 history.task["pipeline_translation_targets"] = [language]
 
             async def dub(task_id, language, voice, speed):
                 order.append("tts")
-                audio = root / "audio.wav"; audio.touch()
-                video = root / "dubbed.mp4"; video.touch()
+                audio = root / "audio.wav"; audio.write_bytes(b"fixture")
+                video = root / "dubbed.mp4"; video.write_bytes(b"fixture")
                 history.task.update({
                     "dubbing_audio_path": str(audio),
                     "dubbing_raw_video_path": str(video),
@@ -94,11 +94,11 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_optional_burn_uses_raw_dubbed_video(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            transcription = root / "asr.json"; transcription.touch()
-            translation = root / "zh.json"; translation.touch()
-            audio = root / "audio.wav"; audio.touch()
-            raw_video = root / "dubbed.mp4"; raw_video.touch()
-            burned_video = root / "dubbed_subtitled.mp4"; burned_video.touch()
+            transcription = root / "asr.json"; transcription.write_bytes(b"fixture")
+            translation = root / "zh.json"; translation.write_bytes(b"fixture")
+            audio = root / "audio.wav"; audio.write_bytes(b"fixture")
+            raw_video = root / "dubbed.mp4"; raw_video.write_bytes(b"fixture")
+            burned_video = root / "dubbed_subtitled.mp4"; burned_video.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(transcription),
                 "translations": {"Chinese": str(translation)},
@@ -135,10 +135,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_end_note_renders_without_subtitles_and_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            translation = root / "zh.json"; translation.touch()
-            audio = root / "dub.wav"; audio.touch()
-            raw_video = root / "raw.mp4"; raw_video.touch()
-            final_video = root / "final.mp4"; final_video.touch()
+            translation = root / "zh.json"; translation.write_bytes(b"fixture")
+            audio = root / "dub.wav"; audio.write_bytes(b"fixture")
+            raw_video = root / "raw.mp4"; raw_video.write_bytes(b"fixture")
+            final_video = root / "final.mp4"; final_video.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(translation),
                 "translations": {"Chinese": str(translation)},
@@ -168,10 +168,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_resume_skips_existing_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            transcription = root / "asr.json"; transcription.touch()
-            translation = root / "zh.json"; translation.touch()
-            audio = root / "audio.wav"; audio.touch()
-            video = root / "video.mp4"; video.touch()
+            transcription = root / "asr.json"; transcription.write_bytes(b"fixture")
+            translation = root / "zh.json"; translation.write_bytes(b"fixture")
+            audio = root / "audio.wav"; audio.write_bytes(b"fixture")
+            video = root / "video.mp4"; video.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(transcription),
                 "translations": {"Chinese": str(translation)},
@@ -193,8 +193,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_edited_subtitle_translation_is_reused_for_dubbing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            transcription = root / "asr.json"; transcription.touch()
-            old_translation = root / "old-ja.json"; old_translation.touch()
+            transcription = root / "asr.json"; transcription.write_bytes(b"fixture")
+            old_translation = root / "old-ja.json"; old_translation.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(transcription),
                 "translations": {"Japanese": str(old_translation)},
@@ -203,13 +203,15 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
             async def translate(_task_id, language):
                 calls.append("translate")
-                fitted = root / "fitted-ja.json"; fitted.touch()
+                fitted = root / "fitted-ja.json"; fitted.write_bytes(b"fixture")
                 history.task["translations"] = {language: str(fitted)}
                 history.task["translation_profiles"] = {language: "dubbing"}
 
             async def dub(*_args):
                 calls.append("dub")
-                video = root / "dubbed.mp4"; video.touch()
+                video = root / "dubbed.mp4"; video.write_bytes(b"fixture")
+                audio = video.with_suffix('.wav'); audio.write_bytes(b"fixture")
+                history.task["dubbing_audio_path"] = str(audio)
                 history.task["dubbing_video_path"] = str(video)
 
             service = PipelineService(translate_stage=translate, dub_stage=dub)
@@ -224,10 +226,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_force_translation_regenerates_translation_and_dubbing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            transcription = root / "asr.json"; transcription.touch()
-            translation = root / "zh.json"; translation.touch()
-            old_audio = root / "old.wav"; old_audio.touch()
-            old_video = root / "old.mp4"; old_video.touch()
+            transcription = root / "asr.json"; transcription.write_bytes(b"fixture")
+            translation = root / "zh.json"; translation.write_bytes(b"fixture")
+            old_audio = root / "old.wav"; old_audio.write_bytes(b"fixture")
+            old_video = root / "old.mp4"; old_video.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(transcription),
                 "translation_path": str(translation),
@@ -243,11 +245,11 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             async def translate(*_args): calls.append("translate")
             async def export(*_args):
                 calls.append("export")
-                subtitle = root / "fresh.srt"; subtitle.touch()
+                subtitle = root / "fresh.srt"; subtitle.write_bytes(b"fixture")
                 history.task["subtitle_outputs"] = {"srt": str(subtitle)}
             async def dub(*_args):
                 calls.append("dub")
-                fresh = root / "fresh.mp4"; fresh.touch()
+                fresh = root / "fresh.mp4"; fresh.write_bytes(b"fixture")
                 history.task["dubbing_raw_video_path"] = str(fresh)
                 history.task["dubbing_video_path"] = str(fresh)
 
@@ -262,10 +264,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_target_language_change_regenerates_dubbing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            transcription = root / "asr.json"; transcription.touch()
-            korean = root / "ko.json"; korean.touch()
-            old_audio = root / "zh.wav"; old_audio.touch()
-            old_video = root / "zh.mp4"; old_video.touch()
+            transcription = root / "asr.json"; transcription.write_bytes(b"fixture")
+            korean = root / "ko.json"; korean.write_bytes(b"fixture")
+            old_audio = root / "zh.wav"; old_audio.write_bytes(b"fixture")
+            old_video = root / "zh.mp4"; old_video.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(transcription),
                 "translations": {"Korean": str(korean)},
@@ -301,10 +303,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_voice_or_speed_change_regenerates_dubbing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            transcription = root / "asr.json"; transcription.touch()
-            translation = root / "ja.json"; translation.touch()
-            audio = root / "ja.wav"; audio.touch()
-            video = root / "ja.mp4"; video.touch()
+            transcription = root / "asr.json"; transcription.write_bytes(b"fixture")
+            translation = root / "ja.json"; translation.write_bytes(b"fixture")
+            audio = root / "ja.wav"; audio.write_bytes(b"fixture")
+            video = root / "ja.mp4"; video.write_bytes(b"fixture")
             history = History({
                 "task_id": "one", "transcription_path": str(transcription),
                 "translations": {"Japanese": str(translation)},

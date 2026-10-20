@@ -591,8 +591,8 @@ class DubbingService:
             if text:
                 groups.append(
                     SimpleNamespace(
-                        start=float(current[0].start),
-                        end=float(current[-1].end),
+                        start=min(float(member.start) for member in current),
+                        end=max(float(member.end) for member in current),
                         text=text,
                         segment_indices=tuple(current_indices),
                     )
@@ -604,8 +604,14 @@ class DubbingService:
             if not (segment.text or "").strip():
                 continue
             if current:
-                prospective_duration = float(segment.end) - float(current[0].start)
-                gap = float(segment.start) - float(current[-1].end)
+                # Nested/overlapping rows need the whole group's time envelope.
+                group_start = min(float(member.start) for member in current)
+                group_end = max(float(member.end) for member in current)
+                prospective_duration = (
+                    max(group_end, float(segment.end))
+                    - min(group_start, float(segment.start))
+                )
+                gap = float(segment.start) - group_end
                 if gap > 0.75 or prospective_duration > NATURAL_MAX_GROUP_SECONDS:
                     flush()
             current.append(segment)

@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.history import history_manager
 from app.core.events import event_generator, emit_event, TASK_EVENT_FIELDS
 from app.core.file_security import contained_file
+from app.core.output_paths import to_output_url, output_reference_path
 from app.services.pipeline_service import pipeline_service
 from app.services.translation_review_service import (
     TranslationReviewService, TranslationReviewConflict, TranslationReviewUnavailable, translation_busy,
@@ -34,13 +35,7 @@ def _task_event_snapshot(task: dict) -> dict:
 
 def _to_url_path(file_path: Optional[str]) -> Optional[str]:
     """Convert an absolute output file path to a URL-friendly static path."""
-    if not file_path:
-        return None
-    try:
-        rel = Path(file_path).relative_to(settings.OUTPUT_DIR)
-        return f"/static/output/{rel.as_posix()}"
-    except ValueError:
-        return file_path
+    return to_output_url(file_path)
 
 
 def _video_url(task: dict) -> Optional[str]:
@@ -53,7 +48,6 @@ def _video_url(task: dict) -> Optional[str]:
 
 def _output_availability(task: dict) -> dict[str, bool]:
     """Inspect browser output references without altering persisted task state."""
-    from urllib.parse import unquote
     references = [task.get(key) for key in ('burn_path', 'dubbing_audio_path', 'dubbing_video_path')]
     references.extend((task.get('subtitle_outputs') or {}).values())
     result = {}
@@ -64,13 +58,13 @@ def _output_availability(task: dict) -> dict[str, bool]:
         result[value] = False
         if not value.startswith('/static/output/') or any(char in value for char in ('#', '?')):
             continue
-        path = contained_file(settings.OUTPUT_DIR, unquote(value[len('/static/output/'):]))
+        path = output_reference_path(value)
         if path is None:
             continue
         try:
             # A local filename containing a literal percent escape must not
             # authorize the different filename decoded by the browser.
-            if not reference.startswith('/static/output/') and Path(reference).resolve() != path:
+            if not reference.startswith('/static/output/') and Path(reference).resolve() != path.resolve():
                 continue
             if path.stat().st_size > 0:
                 with path.open('rb') as stream:
@@ -99,11 +93,9 @@ def _delete_output_file(url_or_path: Optional[str], deleted_files: Optional[list
     """
     if not url_or_path:
         return
-    p = Path(url_or_path)
-    if url_or_path.startswith("/static/output/"):
-        p = settings.OUTPUT_DIR / url_or_path[len("/static/output/"):]
+    p = output_reference_path(url_or_path)
     try:
-        if p.exists() and _is_safe_path(p):
+        if p is not None and p.exists() and _is_safe_path(p):
             p.unlink()
             if deleted_files is not None:
                 deleted_files.append(str(p))

@@ -93,7 +93,7 @@ def test_local_unicode_and_encoded_url_paths_are_checked(saved_task, endpoint):
     history.update_task(task_id, {'dubbing_audio_path': url, 'dubbing_video_path': '/static/output/literal%2520name.mp4',
                                   'burn_path': str(output / '中文 audio.wav')})
     assert read_task(task_id, endpoint)['output_availability'] == {
-        url: True, '/static/output/literal%2520name.mp4': True, '/static/output/中文 audio.wav': True,
+        url: True, '/static/output/literal%2520name.mp4': True,
     }
 
 
@@ -139,7 +139,7 @@ def test_local_path_cannot_authorize_a_different_browser_file(saved_task, endpoi
     (output / 'literal name.wav').write_bytes(b'wrong target')
     history.update_task(task_id, {'dubbing_audio_path': str(intended)})
     result = read_task(task_id, endpoint)
-    assert result['output_availability'] == {'/static/output/' + name: False}
+    assert result['output_availability'] == {'/static/output/' + quote(name): True}
     history.update_task(task_id, {'dubbing_audio_path': '/static/output/' + quote(name)})
     assert read_task(task_id, endpoint)['output_availability'] == {'/static/output/' + quote(name): True}
 

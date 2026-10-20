@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -7,6 +6,7 @@ from fastapi import APIRouter, Form, HTTPException
 from fastapi.responses import FileResponse
 
 from app.core.config import settings
+from app.core.output_paths import to_output_url, output_reference_path
 from app.core.history import history_manager
 from app.core.task_run import current_task_run
 from app.services.pipeline_service import pipeline_service
@@ -45,8 +45,9 @@ def _resolve_fs_path(path_str: Optional[str]) -> Optional[Path]:
     if not path_str:
         return None
     if path_str.startswith("/static/output/"):
-        rel = path_str[len("/static/output/"):].replace("/", os.sep)
-        target = settings.OUTPUT_DIR / rel
+        target = output_reference_path(path_str)
+        if target is None:
+            return None
     else:
         target = settings.OUTPUT_DIR / path_str
 
@@ -339,7 +340,7 @@ async def export_subtitles(
         filename = path.stem.replace("_translated", "").replace(f"_{target_lang}", "") + suffix
         out_path = subtitle_formatter.save_to_file(content, filename, ext)
 
-        output_url = f"/static/output/{out_path.relative_to(settings.OUTPUT_DIR).as_posix()}"
+        output_url = to_output_url(out_path)
         if task_id and task:
             subtitle_outputs = dict(task.get("subtitle_outputs") or {})
             subtitle_outputs[ext] = str(out_path)

@@ -1,10 +1,10 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 
 from app.core.config import settings
+from app.core.output_paths import to_output_url
 from app.core.task_run import current_task_run
 
 logger = logging.getLogger(__name__)
@@ -40,11 +40,7 @@ def _browser_event(data: Dict[str, Any]) -> Dict[str, Any]:
     def output_url(value):
         if not isinstance(value, str):
             return value
-        try:
-            relative = Path(value).relative_to(settings.OUTPUT_DIR)
-        except ValueError:
-            return value
-        return f"/static/output/{relative.as_posix()}"
+        return to_output_url(value)
 
     result = dict(data)
     for key in ("transcription_path", "translation_path", "burn_path",

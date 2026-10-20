@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.config import settings
+from app.core.output_paths import to_output_url
 from app.core.history import history_manager
 from app.core.events import emit_event
 from app.core.schemas import TranscriptionResult
@@ -207,11 +208,7 @@ class VideoBurnService:
         return float(parts[0])
 
     def _to_download_url(self, file_path: Path) -> str:
-        try:
-            rel = file_path.relative_to(settings.OUTPUT_DIR)
-            return f"/static/output/{rel.as_posix()}"
-        except ValueError:
-            return str(file_path)
+        return to_output_url(file_path)
 
     def burn(
         self,

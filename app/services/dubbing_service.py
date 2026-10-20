@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from app.core.config import settings
+from app.core.output_paths import to_output_url
 from app.core.gpu_lifecycle import gpu_provider_lifecycle
 from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.history import history_manager
@@ -206,11 +207,7 @@ class DubbingService:
             return None
 
     def _to_download_url(self, file_path: Path) -> str:
-        try:
-            rel = file_path.relative_to(settings.OUTPUT_DIR)
-            return f"/static/output/{rel.as_posix()}"
-        except ValueError:
-            return str(file_path)
+        return to_output_url(file_path)
 
     def _parse_time(self, time_str: str) -> float:
         parts = time_str.split(":")

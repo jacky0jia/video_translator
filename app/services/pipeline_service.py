@@ -6,10 +6,10 @@ import logging
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import unquote
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.output_paths import output_reference_path
 from app.core.events import emit_event, task_event_snapshot
 from app.core.history import history_manager
 from app.core.task_run import TaskRun, current_task_run, task_run_scope
@@ -121,11 +121,7 @@ class PipelineService:
 
     @staticmethod
     def _artifact_path(value: str | None) -> Path | None:
-        if not value:
-            return None
-        if value.startswith("/static/output/"):
-            return Path(settings.OUTPUT_DIR) / Path(unquote(value)).name
-        return Path(value)
+        return output_reference_path(value)
 
     @classmethod
     def _can_reuse_dubbing(

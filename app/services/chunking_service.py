@@ -31,11 +31,20 @@ def bound_segments_to_duration(segments, duration):
 
 
 def deduplicate_segments(segments):
-    """Remove near-duplicate segments in overlap regions, keeping higher confidence."""
+    """Deduplicate matching overlapping text, never merely nearby timestamps."""
     segments = sorted(segments, key=lambda s: s.start)
     result = []
     for seg in segments:
-        if result and abs(seg.start - result[-1].start) < settings.DEDUPLICATE_THRESHOLD_SECONDS:
+        if (
+            result
+            and abs(seg.start - result[-1].start) < settings.DEDUPLICATE_THRESHOLD_SECONDS
+            and all(math.isfinite(value) for value in (
+                seg.start, seg.end, result[-1].start, result[-1].end,
+            ))
+            and seg.text.strip()
+            and seg.text.strip() == result[-1].text.strip()
+            and min(seg.end, result[-1].end) > max(seg.start, result[-1].start)
+        ):
             if seg.confidence > result[-1].confidence:
                 result[-1] = seg
         else:

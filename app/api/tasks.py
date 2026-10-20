@@ -88,8 +88,8 @@ def _delete_subtitle_versions(task, deleted_files=None):
         _delete_output_file(value, deleted_files)
 
 
-def _ensure_tasks_deletable(tasks):
-    """Preflight the whole selection before touching any task files."""
+def _ensure_tasks_idle(tasks, *, action='deleting'):
+    """Preflight before clearing task state or touching any task files."""
     from app.services.dubbing_service import dubbing_service
     active_statuses = {
         'pending', 'uploading', 'downloading', 'extracting_audio', 'transcribing',
@@ -111,7 +111,7 @@ def _ensure_tasks_deletable(tasks):
             or task.get('burn_status') == 'processing'
             or task.get('dubbing_status') == 'processing'
         ):
-            raise HTTPException(409, 'Task is running or stopping; cancel it and wait before deleting')
+            raise HTTPException(409, f'Task is running or stopping; cancel it and wait before {action}')
 
 
 class SegmentEdit(BaseModel):
@@ -454,7 +454,7 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
 async def delete_all_tasks():
     """Delete all tasks and their associated files."""
     tasks = history_manager.get_all_tasks()
-    _ensure_tasks_deletable(tasks)
+    _ensure_tasks_idle(tasks)
     deleted_count = 0
     for task in tasks:
         task_id = task["task_id"]
@@ -527,7 +527,7 @@ class BatchDeleteRequest(BaseModel):
 @router.post("/tasks/batch-delete")
 async def batch_delete_tasks(payload: BatchDeleteRequest):
     """Delete multiple tasks and their associated files."""
-    _ensure_tasks_deletable([history_manager.get_task(task_id) for task_id in payload.task_ids])
+    _ensure_tasks_idle([history_manager.get_task(task_id) for task_id in payload.task_ids])
     deleted: list[str] = []
     failed: list[str] = []
     for task_id in payload.task_ids:
@@ -603,7 +603,7 @@ async def delete_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    _ensure_tasks_deletable([task])
+    _ensure_tasks_idle([task])
     deleted_files: list[str] = []
     _delete_subtitle_versions(task, deleted_files)
 
@@ -685,8 +685,7 @@ async def retry_task(task_id: str, background_tasks: BackgroundTasks):
     if not task:
         raise HTTPException(status_code=404, detail="taskNotFound")
 
-    if pipeline_service.is_busy(task_id):
-        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
+    _ensure_tasks_idle([task], action='retrying')
     source_path = task.get("source_path") or task.get("upload_path")
     if not source_path:
         raise HTTPException(status_code=400, detail="retryNoSourceFile")

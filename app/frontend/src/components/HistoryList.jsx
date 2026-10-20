@@ -15,7 +15,7 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
         if (r.ok) {
           onDelete([taskId]);
         } else {
-          showToast(t('deleteFailed'), 'error');
+          showToast(t(r.status === 409 ? 'deleteBusy' : 'deleteFailed'), 'error');
         }
       })
       .catch(() => showToast(t('deleteFailed'), 'error'));
@@ -31,7 +31,7 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
         if (r.ok) {
           onDelete(Array.from(ids));
         } else {
-          showToast(t('deleteFailed'), 'error');
+          showToast(t(r.status === 409 ? 'deleteBusy' : 'deleteFailed'), 'error');
         }
       })
       .catch(() => showToast(t('deleteFailed'), 'error'));
@@ -43,7 +43,7 @@ export default function HistoryList({ tasks, onSelect, onRefresh, onDelete, onDe
         if (r.ok) {
           onDeleteAll();
         } else {
-          showToast(t('deleteFailed'), 'error');
+          showToast(t(r.status === 409 ? 'deleteBusy' : 'deleteFailed'), 'error');
         }
       })
       .catch(() => showToast(t('deleteFailed'), 'error'));

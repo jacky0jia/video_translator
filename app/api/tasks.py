@@ -88,6 +88,32 @@ def _delete_subtitle_versions(task, deleted_files=None):
         _delete_output_file(value, deleted_files)
 
 
+def _ensure_tasks_deletable(tasks):
+    """Preflight the whole selection before touching any task files."""
+    from app.services.dubbing_service import dubbing_service
+    active_statuses = {
+        'pending', 'uploading', 'downloading', 'extracting_audio', 'transcribing',
+        'translating', 'dubbing', 'burning', 'waiting_for_gpu', 'switching_model',
+        'pipeline_starting', 'pipeline_transcribing', 'pipeline_translating',
+        'pipeline_translated', 'pipeline_dubbing', 'pipeline_rendering', 'pipeline_cancelling',
+    }
+    for task in tasks:
+        if not task:
+            continue
+        stage_field = {'dubbing': 'dubbing_status', 'burning': 'burn_status'}.get(task.get('status'))
+        finished_stage = stage_field and task.get(stage_field) in {'completed', 'failed', 'cancelled'}
+        if (
+            pipeline_service.is_busy(task['task_id']) or translation_busy(task['task_id'])
+            or not dubbing_service.wait_for_stop(task['task_id'], timeout=0)
+            or (task.get('status') in active_statuses and not finished_stage)
+            or task.get('pipeline_status') in {'processing', 'cancelling'}
+            or task.get('pipeline_cleanup_pending')
+            or task.get('burn_status') == 'processing'
+            or task.get('dubbing_status') == 'processing'
+        ):
+            raise HTTPException(409, 'Task is running or stopping; cancel it and wait before deleting')
+
+
 class SegmentEdit(BaseModel):
     source_text: Optional[str] = None
     target_text: Optional[str] = None
@@ -428,6 +454,7 @@ async def edit_segment(task_id: str, index: int, edit: SegmentEdit):
 async def delete_all_tasks():
     """Delete all tasks and their associated files."""
     tasks = history_manager.get_all_tasks()
+    _ensure_tasks_deletable(tasks)
     deleted_count = 0
     for task in tasks:
         task_id = task["task_id"]
@@ -500,6 +527,7 @@ class BatchDeleteRequest(BaseModel):
 @router.post("/tasks/batch-delete")
 async def batch_delete_tasks(payload: BatchDeleteRequest):
     """Delete multiple tasks and their associated files."""
+    _ensure_tasks_deletable([history_manager.get_task(task_id) for task_id in payload.task_ids])
     deleted: list[str] = []
     failed: list[str] = []
     for task_id in payload.task_ids:
@@ -575,6 +603,7 @@ async def delete_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    _ensure_tasks_deletable([task])
     deleted_files: list[str] = []
     _delete_subtitle_versions(task, deleted_files)
 

@@ -78,6 +78,10 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const [measurements, setMeasurements] = useState(null);
   const [fontRevision, setFontRevision] = useState(0);
   const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' | 'time' }
+  const editSessionRef = useRef(null);
+  const pendingSavesRef = useRef(new Map());
+  const mountedRef = useRef(false);
+  const [pendingSaves, setPendingSaves] = useState(() => new Map());
   const [editValue, setEditValue] = useState('');
   const [editStart, setEditStart] = useState('');
   const [editEnd, setEditEnd] = useState('');
@@ -98,7 +102,16 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     rows: targetData.alignment_review_rows, check_incomplete: targetData.alignment_check_incomplete,
   } : null;
   // An editor belongs to one document; never carry its draft into another track.
-  useEffect(() => { setEditingCell(null); }, [task?.task_id, task?.transcription_path, targetPath]);
+  useLayoutEffect(() => {
+    editSessionRef.current = null;
+    setEditingCell(null);
+  }, [task?.task_id, task?.transcription_path, targetPath]);
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; editSessionRef.current = null; };
+  }, []);
+  const savePending = pendingSaves.has(task?.task_id);
+  const savingCurrentEdit = savePending && pendingSaves.get(task?.task_id) === editingCell;
 
   useEffect(() => {
     fetch('/api/fonts')
@@ -266,6 +279,13 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     }
   };
 
+  const beginEdit = (index, field) => {
+    const session = { index, field };
+    editSessionRef.current = session;
+    setEditingCell(session);
+  };
+  const cancelEdit = () => { editSessionRef.current = null; setEditingCell(null); };
+
   const startEdit = (index, field) => {
     if ((field !== 'target' && sourceDocument.status !== 'ready')
       || (field === 'target' && targetDocument.status !== 'ready')
@@ -278,18 +298,18 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       if (!segment) return;
       setEditStart(formatTime(segment.start));
       setEditEnd(formatTime(segment.end));
-      setEditingCell({ index, field });
+      beginEdit(index, field);
       return;
     }
     const text = field === 'source'
       ? sourceSegments[index]?.text || ''
       : targetSegments[index]?.text || '';
-    setEditingCell({ index, field });
+    beginEdit(index, field);
     setEditValue(text);
   };
 
   const saveEdit = useCallback(async () => {
-    if (!task || !editingCell) return;
+    if (!task || !editingCell || editSessionRef.current !== editingCell || pendingSavesRef.current.has(task.task_id)) return;
     const { index, field } = editingCell;
     if ((field !== 'target' && sourceDocument.status !== 'ready')
       || (field === 'target' && targetDocument.status !== 'ready')
@@ -317,44 +337,62 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       }
     }
     if (Object.keys(payload).length === 0) {
-      setEditingCell(null);
+      cancelEdit();
       return;
     }
 
-    const res = await fetch(`/api/tasks/${task.task_id}/segments/${index}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const session = editingCell;
+    const isCurrent = () => mountedRef.current && editSessionRef.current === session;
+    // Serialize writes for a task, even if its editor is cancelled/reopened or
+    // selection moves A -> B -> A before the old response finishes.
+    pendingSavesRef.current.set(task.task_id, session);
+    setPendingSaves(new Map(pendingSavesRef.current));
+    try {
+      const res = await fetch(`/api/tasks/${task.task_id}/segments/${index}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    if (res.ok) {
-      if (payload.source_text !== undefined) {
-        setSourceSegments(prev => {
-          const next = [...prev];
-          next[index] = { ...next[index], text: editValue, source_text_edited: true };
-          return next;
-        });
+      if (!mountedRef.current) return;
+
+      if (res.ok) {
+        // Document setters are scoped to their task/path independently of the
+        // editor. Update the saved baseline even if a new draft is open, but
+        // never replace its input or close it from the old response.
+        if (payload.source_text !== undefined) {
+          setSourceSegments(prev => {
+            const next = [...prev];
+            next[index] = { ...next[index], text: editValue, source_text_edited: true };
+            return next;
+          });
+        }
+        if (payload.target_text !== undefined) {
+          setTargetSegments(prev => {
+            const next = [...prev];
+            next[index] = { ...next[index], text: editValue };
+            return next;
+          });
+        }
+        if (payload.start !== undefined) {
+          setSourceSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
+          setTargetSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
+        }
+        if (isCurrent()) cancelEdit();
+        await onTaskRefresh?.(task.task_id);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        if (isCurrent()) showToast(t('save') + ' ' + (typeof err.detail === 'string' ? err.detail : t('unknownError')), 'error');
       }
-      if (payload.target_text !== undefined) {
-        setTargetSegments(prev => {
-          const next = [...prev];
-          next[index] = { ...next[index], text: editValue };
-          return next;
-        });
+    } catch (error) {
+      if (isCurrent()) showToast(t('save') + ' ' + (error.message || t('unknownError')), 'error');
+    } finally {
+      if (pendingSavesRef.current.get(task.task_id) === session) {
+        pendingSavesRef.current.delete(task.task_id);
+        if (mountedRef.current) setPendingSaves(new Map(pendingSavesRef.current));
       }
-      if (payload.start !== undefined) {
-        setSourceSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
-        setTargetSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
-      }
-      setEditingCell(null);
-      await onTaskRefresh?.(task.task_id);
-    } else {
-      const err = await res.json().catch(() => ({}));
-      showToast(t('save') + ' ' + (err.detail || t('unknownError')), 'error');
     }
   }, [task, editingCell, editValue, editStart, editEnd, sourceSegments, targetSegments, sourceDocument.status, targetDocument.status, setSourceSegments, setTargetSegments, t, showToast, onTaskRefresh]);
-
-  const cancelEdit = () => setEditingCell(null);
 
   const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
   const metricScope = useMemo(() => ({}), [displayEvents, previewLayout.imageWidth, previewLayout.fontSize, bold, fontFamily, fontRevision, task?.task_id]);
@@ -542,9 +580,9 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       <span className="text-xs text-slate-400">#{i + 1}</span>
                       {isEditingTime ? <div className="flex flex-col gap-1">
-                        <input aria-label={t('startTime')} value={editStart} onChange={e => setEditStart(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
-                        <input aria-label={t('endTime')} value={editEnd} onChange={e => setEditEnd(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
-                        <div className="flex gap-1"><button onClick={saveEdit} className="rounded bg-green-600 px-2 py-0.5 text-white">{t('save')}</button><button onClick={cancelEdit} className="rounded bg-gray-500 px-2 py-0.5 text-white">{t('cancel')}</button></div>
+                        <input aria-label={t('startTime')} value={editStart} disabled={savingCurrentEdit} onChange={e => setEditStart(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
+                        <input aria-label={t('endTime')} value={editEnd} disabled={savingCurrentEdit} onChange={e => setEditEnd(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
+                        <div className="flex gap-1"><button onClick={saveEdit} disabled={savePending} className="rounded bg-green-600 px-2 py-0.5 text-white">{t('save')}</button><button onClick={cancelEdit} className="rounded bg-gray-500 px-2 py-0.5 text-white">{t('cancel')}</button></div>
                       </div> : src || tgt ? (
                         <div className="flex items-center gap-1"><span
                           onClick={() => seekTo((src || tgt).start)}
@@ -560,6 +598,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                         <div className="flex items-start gap-2">
                           <textarea
                             value={editValue}
+                            disabled={savingCurrentEdit}
                             onChange={e => setEditValue(e.target.value)}
                             onKeyDown={e => {
                               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
@@ -569,7 +608,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                             className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-500 text-slate-900 dark:text-white resize-none"
                           />
                           <div className="flex flex-col gap-1">
-                            <button onClick={saveEdit}
+                            <button onClick={saveEdit} disabled={savePending}
                               className="px-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs">{t('save')}</button>
                             <button onClick={cancelEdit}
                               className="px-2 py-1 bg-gray-400 hover:bg-gray-500 dark:bg-slate-600 dark:hover:bg-slate-500 text-white rounded text-xs">{t('cancel')}</button>
@@ -586,6 +625,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                         <div className="flex items-start gap-2">
                           <textarea
                             value={editValue}
+                            disabled={savingCurrentEdit}
                             onChange={e => setEditValue(e.target.value)}
                             onKeyDown={e => {
                               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
@@ -595,7 +635,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                             className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-500 text-slate-900 dark:text-white resize-none"
                           />
                           <div className="flex flex-col gap-1">
-                            <button onClick={saveEdit}
+                            <button onClick={saveEdit} disabled={savePending}
                               className="px-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs">{t('save')}</button>
                             <button onClick={cancelEdit}
                               className="px-2 py-1 bg-gray-400 hover:bg-gray-500 dark:bg-slate-600 dark:hover:bg-slate-500 text-white rounded text-xs">{t('cancel')}</button>

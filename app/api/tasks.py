@@ -51,6 +51,35 @@ def _video_url(task: dict) -> Optional[str]:
     return None
 
 
+def _output_availability(task: dict) -> dict[str, bool]:
+    """Inspect browser output references without altering persisted task state."""
+    from urllib.parse import unquote
+    references = [task.get(key) for key in ('burn_path', 'dubbing_audio_path', 'dubbing_video_path')]
+    references.extend((task.get('subtitle_outputs') or {}).values())
+    result = {}
+    for reference in references:
+        if not isinstance(reference, str) or not reference:
+            continue
+        value = _to_url_path(reference)
+        result[value] = False
+        if not value.startswith('/static/output/') or any(char in value for char in ('#', '?')):
+            continue
+        path = contained_file(settings.OUTPUT_DIR, unquote(value[len('/static/output/'):]))
+        if path is None:
+            continue
+        try:
+            # A local filename containing a literal percent escape must not
+            # authorize the different filename decoded by the browser.
+            if not reference.startswith('/static/output/') and Path(reference).resolve() != path:
+                continue
+            if path.stat().st_size > 0:
+                with path.open('rb') as stream:
+                    result[value] = bool(stream.read(1))
+        except (OSError, ValueError, RuntimeError):
+            pass
+    return result
+
+
 _ALLOWED_DELETE_DIRS = (settings.UPLOAD_DIR, settings.OUTPUT_DIR, settings.TEMP_DIR)
 
 
@@ -238,6 +267,7 @@ async def list_tasks():
     """List all translation tasks."""
     tasks = history_manager.get_all_tasks()
     for task in tasks:
+        task['output_availability'] = _output_availability(task)
         task['video_url'] = _video_url(task)
         task["transcription_path"] = _to_url_path(task.get("transcription_path"))
         task["translation_path"] = _to_url_path(task.get("translation_path"))
@@ -263,6 +293,7 @@ async def get_task_details(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     task = copy.deepcopy(task)
+    task['output_availability'] = _output_availability(task)
     task['video_url'] = _video_url(task)
     task["transcription_path"] = _to_url_path(task.get("transcription_path"))
     task["translation_path"] = _to_url_path(task.get("translation_path"))

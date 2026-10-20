@@ -5,7 +5,7 @@ import EmptyWorkflowState from './EmptyWorkflowState';
 const SUBTITLE_PREVIEW_BYTES = 256 * 1024;
 
 function outputUrl(path) {
-  if (typeof path !== 'string' || !path.startsWith('/static/output/') || path.includes('\\')) return null;
+  if (typeof path !== 'string' || !path.startsWith('/static/output/') || path.includes('\\') || /[?#]/.test(path)) return null;
   const url = new URL(path, window.location.origin);
   return url.origin === window.location.origin && url.pathname.startsWith('/static/output/') ? url.pathname : null;
 }
@@ -77,6 +77,8 @@ function ExportItem({ item, t }) {
   const [open, setOpen] = useState(false);
   const [mediaError, setMediaError] = useState(false);
   const url = outputUrl(item.path);
+  const available = item.available === true && Boolean(url);
+  const unavailableMessage = t(item.available === undefined && url ? 'outputAvailabilityUnknown' : 'outputFileUnavailable');
 
   return <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 dark:border-slate-700 dark:bg-slate-900/40">
     <div className="flex min-w-0 items-center gap-3">
@@ -85,10 +87,12 @@ function ExportItem({ item, t }) {
         <strong className="block truncate text-sm font-medium">{item.label}</strong>
         <span className="text-xs text-slate-500 dark:text-slate-400">{item.meta}</span>
       </div>
-      <button type="button" className="app-icon-button" aria-label={`${t('preview')} ${item.label}`} aria-expanded={open} onClick={() => { setOpen(value => !value); setMediaError(false); }}><PreviewIcon /></button>
-      {url && <a href={url} download className="app-icon-button" aria-label={`${t('download')} ${item.label}`}><DownloadIcon /></a>}
+      <button type="button" disabled={!available} title={available ? undefined : unavailableMessage} className="app-icon-button" aria-label={`${t('preview')} ${item.label}`} aria-expanded={open && available} onClick={() => { setOpen(value => !value); setMediaError(false); }}><PreviewIcon /></button>
+      {available ? <a href={url} download className="app-icon-button" aria-label={`${t('download')} ${item.label}`}><DownloadIcon /></a> :
+        <button type="button" disabled title={unavailableMessage} className="app-icon-button" aria-label={`${t('download')} ${item.label}`}><DownloadIcon /></button>}
     </div>
-    {open && <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
+    {!available && <p role="status" className="mt-2 text-xs text-amber-700 dark:text-amber-300">{unavailableMessage}</p>}
+    {open && available && <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
       {!url ? <p role="alert" className="text-sm text-rose-600">{t('previewUnavailable')}</p> :
         item.type === 'subtitle' ? <SubtitlePreview path={url} t={t} /> :
           mediaError ? <p role="alert" className="text-sm text-rose-600">{t('previewUnavailable')}</p> :
@@ -131,19 +135,21 @@ export default function ExportPanel({ task, onNavigate }) {
   } else if (task?.last_burn_enabled && task?.burn_path) {
     items.push({ type: 'video', label: t('hardSubtitleVideo'), meta: 'MP4', path: task.burn_path });
   }
+  for (const item of items) item.available = task?.output_availability?.[item.path];
+  const availableCount = items.filter(item => item.available === true && outputUrl(item.path)).length;
 
   return (
     <section className="app-panel overflow-hidden">
       <div className="app-panel-header">
         <div className="app-panel-heading"><span className="app-step">04</span><div><h2>{t('exportPanel')}</h2><p>{t('exportPanelHint')}</p></div></div>
-        <span>{items.length} {t(items.length === 1 ? 'file' : 'files')}</span>
+        <span>{availableCount} {t(availableCount === 1 ? 'availableFile' : 'availableFiles')}</span>
       </div>
       <div className="space-y-2 p-3">
         {task?.outputs_stale && <p role="note" className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">{t('outputsStaleAfterEdit')}</p>}
         {items.length === 0 ? (
           <EmptyWorkflowState icon="↓" title={t(task ? 'exportWaitingTitle' : 'exportEmptyTitle')} description={t(task ? 'exportWaitingHint' : 'processedFilesHint')} action={t(task ? 'goToProcess' : 'goToTasks')} onAction={() => onNavigate?.(task ? 'process' : 'tasks')} />
         ) : items.map(item => (
-          <ExportItem key={`${item.type}-${item.path}`} item={item} t={t} />
+          <ExportItem key={`${task?.task_id}-${item.type}-${item.path}`} item={item} t={t} />
         ))}
       </div>
     </section>

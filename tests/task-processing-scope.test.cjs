@@ -58,7 +58,7 @@ function harness(initialTask, { automaticVoices = true, automaticSave = true } =
           saves.push({ url, body: JSON.parse(options.body) });
           if (automaticSave) return Promise.resolve(response({ workflow_options: JSON.parse(options.body) }));
         }
-        return new Promise(resolve => requests.push({ url, options,
+        return new Promise((resolve, reject) => requests.push({ url, options, reject,
           respond: (data, ok, status) => resolve(response(data, ok, status)),
         }));
       },
@@ -136,6 +136,109 @@ async function reachPipeline(h) {
   assert.equal(h.requests.at(-1).url, '/api/pipeline');
   return { pending, request: h.requests.at(-1) };
 }
+
+const startBaseline = () => task('A', { status: 'failed', pipeline_status: 'failed',
+  pipeline_run_id: 'old-run', state_revision: 10 });
+const authoritativeFinish = (terminal, extra = {}) => task('A', {
+  status: terminal, pipeline_status: terminal, pipeline_stage: terminal,
+  pipeline_run_id: 'new-run', state_revision: 12, progress_percent: terminal === 'completed' ? 100 : 42,
+  message: `Backend ${terminal}`, failed_stage: terminal === 'failed' ? 'pipeline_rendering' : null,
+  dubbing_status: terminal === 'completed' ? 'completed' : terminal,
+  dubbing_target_lang: 'Chinese', dubbing_end_note_enabled: true,
+  dubbing_audio_path: terminal === 'completed' ? '/static/output/a.wav' : null,
+  dubbing_video_path: terminal === 'completed' ? '/static/output/a.mp4' : null,
+  ...extra,
+});
+
+for (const terminal of ['completed', 'failed', 'cancelled']) {
+  for (const arrival of ['before-response', 'after-response']) {
+    for (const errorType of ['http', 'network']) test(`failed start reconciles new ${terminal} ${arrival} ${errorType}`, async () => {
+      const h = await ready(startBaseline());
+      const { pending, request } = await reachPipeline(h);
+      const finish = authoritativeFinish(terminal);
+      if (arrival === 'before-response') {
+        h.render(finish); await h.settle();
+        assert.equal(h.view.running, true, 'must stay locked before POST settles');
+      }
+      if (errorType === 'network') request.reject(new TypeError('Network response lost'));
+      else request.respond({ detail: 'Start response unavailable' }, false, 502);
+      await pending; await h.settle();
+      if (arrival === 'after-response') { h.render(finish); await h.settle(); }
+      assert.equal(h.view.status, terminal);
+      assert.equal(h.view.running, false);
+      assert.equal(h.view.progress, terminal === 'completed' ? 100 : 42);
+      assert.equal(h.view.message, terminal === 'completed' ? 'allOutputsReady' : `Backend ${terminal}`);
+      assert.equal(h.requests.filter(item => item.url === '/api/pipeline').length, 1);
+      if (terminal === 'failed') {
+        const retry = h.view.retryFailedStage(); await h.settle();
+        h.requests.at(-1).respond({ plan: {} }); await h.settle();
+        const body = JSON.parse(h.requests.at(-1).options.body);
+        assert.equal(body.force_translate, false);
+        assert.equal(body.force_dub, false, 'render failure must not regenerate speech');
+        h.requests.at(-1).respond({ status: 'started' }); await retry;
+      }
+      h.unmount();
+    });
+  }
+}
+
+for (const [label, extra] of [
+  ['same old run with newer metadata', { pipeline_run_id: 'old-run', state_revision: 99 }],
+  ['older revision', { state_revision: 9 }],
+  ['equal revision', { state_revision: 10 }],
+  ['unknown run', { pipeline_run_id: null }],
+  ['unknown revision', { state_revision: undefined }],
+]) test(`failed start never adopts ${label}`, async () => {
+  const h = await ready(startBaseline()), { pending, request } = await reachPipeline(h);
+  request.respond({ detail: 'Start response unavailable' }, false, 502);
+  await pending; await h.settle();
+  h.render(authoritativeFinish('completed', extra)); await h.settle();
+  assert.equal(h.view.status, 'failed');
+  assert.equal(h.view.message, 'Start response unavailable');
+  assert.equal(h.requests.filter(item => item.url === '/api/pipeline').length, 1);
+  h.unmount();
+});
+
+test('failed start rejects a snapshot newer than baseline but older than latest event', async () => {
+  const h = await ready(startBaseline()), { pending, request } = await reachPipeline(h);
+  request.respond({ detail: 'Start response unavailable' }, false, 502);
+  await pending; await h.settle();
+  h.event(authoritativeFinish('failed', { state_revision: 20 })); await h.settle();
+  h.render(authoritativeFinish('completed', { state_revision: 15 })); await h.settle();
+  assert.equal(h.view.status, 'failed');
+  assert.equal(h.view.message, 'Backend failed');
+  h.render(authoritativeFinish('completed', { state_revision: 21 })); await h.settle();
+  assert.equal(h.view.status, 'completed');
+  h.unmount();
+});
+
+test('switching tasks discards an uncertain start reconciliation baseline', async () => {
+  const h = await ready(startBaseline()), { pending, request } = await reachPipeline(h);
+  request.reject(new TypeError('Network response lost')); await pending; await h.settle();
+  h.render({ ...activeB(), pipeline_run_id: 'B-run', state_revision: 20 }); await h.settle();
+  const before = snapshot(h);
+  await h.settle(); assert.equal(snapshot(h), before);
+  assert.equal(h.view.status, 'processing'); assert.equal(h.view.running, true);
+  h.render(startBaseline()); await h.settle();
+  h.render(authoritativeFinish('completed')); await h.settle();
+  assert.equal(h.view.status, 'failed', 'returning to A must not reuse its discarded baseline');
+  h.unmount();
+});
+
+test('a later preflight failure cannot adopt the previous uncertain start result', async () => {
+  const h = await ready(startBaseline()), { pending, request } = await reachPipeline(h);
+  request.respond({ detail: 'First response unavailable' }, false, 502);
+  await pending; await h.settle();
+  const next = h.view.run(); await h.settle();
+  const plan = h.requests.at(-1);
+  h.render(authoritativeFinish('completed')); await h.settle();
+  plan.respond({ detail: 'New preflight invalid' }, false, 400);
+  await next; await h.settle();
+  assert.equal(h.view.status, 'failed');
+  assert.equal(h.view.message, 'New preflight invalid');
+  assert.equal(h.requests.filter(item => item.url === '/api/pipeline').length, 1);
+  h.unmount();
+});
 
 test('saved request restores all workflow options before manual continuation', async () => {
   const saved = { route: 'dubbing', subtitle_format: 'ass', burn_subtitles: true,

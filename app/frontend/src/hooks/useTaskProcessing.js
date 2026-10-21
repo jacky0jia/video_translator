@@ -204,6 +204,24 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
   }, [task, t]);
 
   useEffect(() => {
+    const baseline = scope.startReconcileBaseline;
+    if (!baseline || startPending || startRequestRef.current || taskStateIsStale) return;
+    // A failed response does not prove that the server rejected the start.
+    // Only a newer run may replace the local request error, never an old
+    // completed snapshot whose revision merely advanced while saving options.
+    if (!task?.pipeline_run_id || task.pipeline_run_id === baseline.runId
+        || !Number.isSafeInteger(task.state_revision) || task.state_revision <= baseline.revision) return;
+    const restored = deriveTaskProcessingState(task, t);
+    if (restored.status === 'ready') return;
+    scope.startReconcileBaseline = null;
+    scope.latestRevision = Math.max(scope.latestRevision ?? -1, task.state_revision);
+    setProgress(restored.progress); setCurrentStage(restored.currentStage);
+    setMessage(restored.message); setStatus(restored.status); setRunning(restored.running);
+    setLastFailedStage(task.failed_stage || task.interrupted_status || '');
+    completionHandledRef.current = restored.status === 'completed';
+  }, [task, startPending, t]);
+
+  useEffect(() => {
     if (taskStateIsStale) return;
     if (!isStandaloneTranscriptionEvent(task)) return;
     if (task?.pipeline_status === 'processing' || task?.dubbing_status === 'processing' || task?.burn_status === 'processing') return;
@@ -465,6 +483,10 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
   const startDubbing = async ({ forceTranslate = false, forceDub = false, reviewId = null } = {}) => {
     if (!voice) throw new Error(`${t('noVoiceAvailable')}: ${targetLang}`);
     const visibility = subtitleVisibility(subtitleContent, showSource, showTarget, burn);
+    scope.startReconcileBaseline = {
+      runId: task.pipeline_run_id || null,
+      revision: Number.isSafeInteger(task.state_revision) ? task.state_revision : -1,
+    };
     const response = await fetch('/api/pipeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -490,11 +512,13 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
       error.httpStatus = response.status;
       throw error;
     }
+    scope.startReconcileBaseline = null;
     setMessage(t('pipelineStarted'));
   };
 
   const run = async ({ forceTranslate = false, forceDub = false, resume = false } = {}) => {
     if (!scope.active || startRequestRef.current || running || task?.pipeline_cleanup_pending || task?.pipeline_status === 'cancelling' || !task?.transcription_path) return;
+    scope.startReconcileBaseline = null;
     startRequestRef.current = true;
     setStartPending(route === 'dubbing');
     completionHandledRef.current = false;

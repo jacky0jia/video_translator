@@ -57,7 +57,6 @@ def test_standalone_dubbing_success_persists_and_emits_completed_snapshot(standa
     assert emitted[-1]["status"] == "completed"
     assert emitted[-1]["dubbing_status"] == "completed"
     assert emitted[-1]["state_revision"] == saved["state_revision"]
-
 def test_standalone_dubbing_failure_persists_and_emits_failed_snapshot(standalone_task, monkeypatch):
     history, task_id = standalone_task
 

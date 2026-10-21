@@ -174,6 +174,10 @@ export function standaloneTranscriptionCompletion(event, t = value => value) {
 
 export function deriveTaskProcessingState(task, t = value => value) {
   const persistedStatus = task?.status || '';
+  const standaloneDubbingTerminal = persistedStatus === 'dubbing'
+    && task?.pipeline_status !== 'processing' && task?.pipeline_status !== 'cancelling'
+    && ['completed', 'failed', 'cancelled'].includes(task?.dubbing_status)
+    ? task.dubbing_status : null;
   if (task?.pipeline_cleanup_pending || task?.pipeline_status === 'cancelling') {
     return { running: true, status: 'cancelling',
       progress: Math.max(0, Math.min(100, Number(task?.progress_percent) || 0)),
@@ -193,7 +197,7 @@ export function deriveTaskProcessingState(task, t = value => value) {
   const running = task?.pipeline_status === 'processing'
     || task?.dubbing_status === 'processing'
     || task?.burn_status === 'processing'
-    || ACTIVE_TASK_STATUSES.has(persistedStatus);
+    || (ACTIVE_TASK_STATUSES.has(persistedStatus) && !standaloneDubbingTerminal);
   const hasPersistedProgress = task?.progress_percent !== null && task?.progress_percent !== undefined;
   const numericProgress = Number(task?.progress_percent);
   const progress = running
@@ -230,6 +234,18 @@ export function deriveTaskProcessingState(task, t = value => value) {
       task?.burn_status === 'failed' && persistedStatus !== 'translating') {
     return { running: false, status: 'failed', progress, currentStage: 'render',
       message: task.burn_error || task.message || t('statusFailed') };
+  }
+  if (standaloneDubbingTerminal === 'failed') {
+    return { running: false, status: 'failed', progress, currentStage: 'dub',
+      message: task?.dubbing_error || task?.message || t('statusFailed') };
+  }
+  if (standaloneDubbingTerminal === 'cancelled') {
+    return { running: false, status: 'cancelled', progress, currentStage: '',
+      message: task?.dubbing_error || task?.message || t('pipelineCancelled') };
+  }
+  if (standaloneDubbingTerminal === 'completed') {
+    return { running: false, status: 'completed', progress: 100,
+      currentStage: '', message: t('allOutputsReady') };
   }
   if (task?.pipeline_status === 'failed' || ['failed', 'translation_failed'].includes(persistedStatus)) {
     return {

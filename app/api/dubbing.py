@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.events import emit_event, task_event_snapshot
 from app.core.file_security import AUDIO_EXTENSIONS, MAX_CLONE_BYTES, save_upload, validate_file_component
 from app.core.history import history_manager
 from app.services.dubbing_service import dubbing_service
@@ -49,11 +50,21 @@ def _run_dubbing_task(
 ):
     try:
         dubbing_service.dub(task_id, target_lang, voice, speed, clone_sample_path)
+        saved = history_manager.update_task(task_id, {
+            "status": "completed", "dubbing_status": "completed",
+            "progress_percent": 100, "message": "配音完成", "failed_stage": None,
+        })
+        if saved:
+            emit_event(task_id, task_event_snapshot(saved))
     except Exception as exc:
         logger.exception(f"Background dubbing task failed for {task_id}")
         # Validation can fail before dub() publishes its own error state.
-        history_manager.update_task(task_id, {"status": "failed", "dubbing_status": "failed",
-                                             "dubbing_error": str(exc), "message": str(exc)})
+        saved = history_manager.update_task(task_id, {
+            "status": "failed", "dubbing_status": "failed", "dubbing_error": str(exc),
+            "message": str(exc), "failed_stage": "dubbing",
+        })
+        if saved:
+            emit_event(task_id, task_event_snapshot(saved))
 
 
 @router.post("/dubbing")

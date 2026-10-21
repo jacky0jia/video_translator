@@ -108,6 +108,22 @@ assert.deepEqual(completed, {
   currentStage: '', message: 'allOutputsReady',
 });
 
+const legacyStandaloneDubbingCompleted = deriveTaskProcessingState({
+  status: 'dubbing', dubbing_status: 'completed', progress_percent: 100,
+}, t);
+assert.deepEqual(legacyStandaloneDubbingCompleted, {
+  running: false, status: 'completed', progress: 100,
+  currentStage: '', message: 'allOutputsReady',
+});
+
+const legacyStandaloneDubbingFailed = deriveTaskProcessingState({
+  status: 'dubbing', dubbing_status: 'failed', dubbing_error: 'provider offline', progress_percent: 62,
+}, t);
+assert.deepEqual(legacyStandaloneDubbingFailed, {
+  running: false, status: 'failed', progress: 62,
+  currentStage: 'dub', message: 'provider offline',
+});
+
 assert.deepEqual(
   retryPlanForFailure('pipeline_translating', 'Translation failed', 'dubbing'),
   {forceTranslate: true, forceDub: true, resume: true},

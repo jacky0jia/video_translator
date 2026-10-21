@@ -147,14 +147,15 @@ async def event_generator(task_id: str, initial_data: Optional[Dict[str, Any]] =
                     yield ":ping\n\n"
                 continue
 
-            if snapshot_loader and data.get("pipeline_run_id"):
+            if snapshot_loader:
                 current = snapshot_loader()
                 if current is None:
                     yield 'event: not_found\ndata: {"detail":"Task not found"}\n\n'
                     return
                 # A queued terminal event from an older run must not close the
                 # stream for the new run, even if it was emitted before restart.
-                if data["pipeline_run_id"] != current.get("pipeline_run_id"):
+                if (data.get("pipeline_run_id")
+                        and data["pipeline_run_id"] != current.get("pipeline_run_id")):
                     continue
                 current_version, version = _revision(current), _revision(data)
                 if current_version is not None and version is not None and current_version > version:

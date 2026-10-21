@@ -32,6 +32,27 @@ def test_snapshot_is_loaded_after_queue_registration_not_from_old_http_read():
     asyncio.run(scenario())
 
 
+def test_queued_older_revision_coalesces_to_newer_terminal_snapshot(monkeypatch):
+    monkeypatch.setattr(events.settings, "SSE_QUEUE_MAXSIZE", 1)
+
+    async def scenario():
+        state = {"status": "translating", "state_revision": 1}
+        stream = events.event_generator("queued-stale", snapshot_loader=lambda: dict(state))
+        assert payload(await anext(stream))["state_revision"] == 1
+
+        events.emit_event("queued-stale", {"status": "translating", "state_revision": 2})
+        state.update(status="completed", progress_percent=100, state_revision=3)
+
+        reconciled = payload(await asyncio.wait_for(anext(stream), 1))
+        assert reconciled["status"] == "completed"
+        assert reconciled["state_revision"] == 3
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+        assert "queued-stale" not in events._task_queues
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("terminal", ["completed", "failed", "translation_failed", "cancelled"])
 def test_heartbeat_recovers_a_terminal_change_without_an_event(monkeypatch, terminal):
     monkeypatch.setattr(events.settings, "SSE_KEEPALIVE_TIMEOUT", 0.001)

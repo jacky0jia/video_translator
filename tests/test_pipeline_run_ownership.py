@@ -151,6 +151,36 @@ def test_cancel_before_first_turn_records_cancelled_without_starting_work(owned_
     asyncio.run(scenario())
 
 
+def test_natural_completion_before_cancel_preserves_one_completed_terminal(owned_history):
+    async def scenario():
+        import app.core.events as events
+        history, task_id = owned_history
+        queue = events._get_queue(task_id)
+        service = PipelineService()
+
+        async def complete(*_args):
+            data = {"status": "completed", "pipeline_status": "completed", "progress_percent": 100}
+            history.update_task(task_id, data)
+            events.emit_event(task_id, data)
+
+        service.run = complete
+        await service.start(task_id, "Chinese", "voice")
+        completed = history.get_task(task_id)
+        queued = queue.qsize()
+
+        assert completed["status"] == "completed"
+        assert await service.cancel(task_id) is False
+        assert history.get_task(task_id) == completed
+        assert queue.qsize() == queued
+        terminal_events = [
+            queue.get_nowait() for _ in range(queue.qsize())
+            if not queue.empty()
+        ]
+        assert [event["status"] for event in terminal_events].count("completed") == 1
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('stage', ['dubbing', 'burn'])
 @pytest.mark.parametrize('late_error', [False, True])
 def test_cancelled_real_thread_cannot_publish_or_overlap_a_new_pipeline(owned_history, tmp_path, monkeypatch, stage, late_error):
@@ -204,6 +234,9 @@ def test_cancelled_real_thread_cannot_publish_or_overlap_a_new_pipeline(owned_hi
             assert cancelled['pipeline_cleanup_pending'] is True
             assert cancelled[f'{stage}_status'] == 'cancelled'
             queued = queue.qsize()
+            assert await service.cancel(task_id) is False
+            assert history.get_task(task_id) == cancelled
+            assert queue.qsize() == queued
             with pytest.raises(RuntimeError, match='still stopping'):
                 service.start(task_id, 'Chinese', 'voice', output_options={'policy': 'custom'})
             assert history.get_task(task_id) == cancelled

@@ -80,4 +80,3 @@ def test_standalone_dubbing_failure_persists_and_emits_failed_snapshot(standalon
     assert emitted[-1]["status"] == "failed"
     assert emitted[-1]["dubbing_status"] == "failed"
     assert emitted[-1]["state_revision"] == saved["state_revision"]
-

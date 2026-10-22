@@ -126,15 +126,20 @@ async page => {
     await fresh();
     await page.getByRole('button', { name: 'Source #1', exact: true }).click(); await page.locator('textarea').fill('');
     await page.getByRole('button', { name: 'Save', exact: true }).click(); await page.locator('textarea').waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'Target #1', exact: true }).click(); await page.locator('textarea').fill('');
+    await page.getByRole('button', { name: 'Save', exact: true }).click(); await page.locator('textarea').waitFor({ state: 'hidden' });
     await page.getByRole('button', { name: 'Source #1', exact: true }).click(); await page.locator('textarea').fill('Restored source');
+    await page.getByRole('button', { name: 'Save', exact: true }).click(); await page.locator('textarea').waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'Target #1', exact: true }).click(); await page.locator('textarea').fill('Restored target');
     await page.getByRole('button', { name: 'Save', exact: true }).click(); await page.locator('textarea').waitFor({ state: 'hidden' });
     await page.getByRole('button', { name: 'Edit time #1', exact: true }).click();
     await page.getByRole('textbox', { name: 'Start time', exact: true }).fill('00:00.50');
     await page.getByRole('textbox', { name: 'End time', exact: true }).fill('00:02.50');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByRole('textbox', { name: 'Start time', exact: true }).waitFor({ state: 'hidden' });
-    if (documents['source-a'].segments[0].text !== 'Restored source' || documents['target-a'].segments[0].start !== 0.5) throw Error('Source/time save regression');
-    passed.push('source-empty-refill-and-time');
+    if (documents['source-a'].segments[0].text !== 'Restored source' || documents['target-a'].segments[0].text !== 'Restored target'
+      || documents['target-a'].segments[0].start !== 0.5) throw Error('Empty subtitle refill or time save regression');
+    passed.push('source-target-empty-refill-and-time');
     if (errors.length) throw Error('Unhandled page errors: ' + errors.join('; '));
     return { passed, unhandledErrors: errors };
   } finally {

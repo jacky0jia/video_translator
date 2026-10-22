@@ -10,6 +10,7 @@ import { subtitleReviewRows } from '../utils/subtitleReview';
 import { transcriptionReview } from '../utils/transcriptionReview';
 import { dubbingReviewView, dubbingIssueMessage } from '../utils/dubbingReview';
 import { useSubtitleDocument } from '../hooks/useSubtitleDocument';
+import SubtitleTimingNotice from './SubtitleTimingNotice';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -112,6 +113,18 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   }, []);
   const savePending = pendingSaves.has(task?.task_id);
   const savingCurrentEdit = savePending && pendingSaves.get(task?.task_id) === editingCell;
+  const acquireTimingUndo = useCallback(taskId => {
+    if (editSessionRef.current || pendingSavesRef.current.has(taskId)) return null;
+    const token = { kind: 'timing' };
+    pendingSavesRef.current.set(taskId, token);
+    setPendingSaves(new Map(pendingSavesRef.current));
+    return () => {
+      if (pendingSavesRef.current.get(taskId) === token) {
+        pendingSavesRef.current.delete(taskId);
+        if (mountedRef.current) setPendingSaves(new Map(pendingSavesRef.current));
+      }
+    };
+  }, []);
 
   useEffect(() => {
     fetch('/api/fonts')
@@ -287,6 +300,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const cancelEdit = () => { editSessionRef.current = null; setEditingCell(null); };
 
   const startEdit = (index, field) => {
+    if (pendingSavesRef.current.get(task?.task_id)?.kind === 'timing') return;
     if ((field !== 'target' && sourceDocument.status !== 'ready')
       || (field === 'target' && targetDocument.status !== 'ready')
       || (field === 'time' && !['ready', 'missing'].includes(targetDocument.status))) {
@@ -517,6 +531,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">
+        <SubtitleTimingNotice task={task} blocked={!!editingCell || savePending} acquireUndo={acquireTimingUndo} onTaskRefresh={onTaskRefresh} onJump={jumpToSubtitleRow} />
         {[['source', sourceDocument], ['target', targetDocument]].filter(([, document]) => document.status === 'error').map(([track, document]) => <div key={track} role="alert" data-subtitle-load-error={track} className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t(track === 'source' ? 'sourceSubtitleLoadFailed' : 'targetSubtitleLoadFailed')}</p>
           <p className="mt-1 text-xs">{t('subtitleLoadReadOnly')}</p>

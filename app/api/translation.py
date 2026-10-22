@@ -16,6 +16,7 @@ from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.core.file_security import validate_file_component
 from app.services.formatter_service import subtitle_formatter
 from app.services.translation_service import translation_service
+from app.services.subtitle_timing_versions import SubtitleTimingVersions
 
 router = APIRouter()
 
@@ -171,8 +172,12 @@ async def translate_transcription(
         output_filename = f"{path.stem}_translated_{target_lang}_{task_id or 'standalone'}"
         output_path = settings.OUTPUT_DIR / f"{output_filename}.json"
         settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(translated_result.model_dump_json(indent=4))
+        encoded_translation = translated_result.model_dump_json(indent=4).encode('utf-8')
+        timing_updates = {}
+        if task_id:
+            timing_updates = SubtitleTimingVersions(history_manager, settings.OUTPUT_DIR).include_generated_translation(
+                history_manager.get_task(task_id) or {}, target_lang, output_path, encoded_translation)
+        output_path.write_bytes(encoded_translation)
 
         # 5. Update history if task_id is provided
         if task_id:
@@ -201,6 +206,7 @@ async def translate_transcription(
                     "pipeline_translation_targets": pipeline_translation_targets,
                     "translation_alignment_review": alignment_review,
                     "dubbing_review": {**task["dubbing_review"], "needs_recheck": True} if task.get("dubbing_review") else None,
+                    **timing_updates,
                 },
             )
             emit_event(task_id, {"status": final_status, "message": "completed", "target_lang": target_lang,

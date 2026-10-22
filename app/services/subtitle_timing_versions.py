@@ -27,6 +27,34 @@ def _hash(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def timing_summary(plan, *, status='applied'):
+    repaired = {change.index + 1 for change in plan.changes}
+    remaining = [pair for pair in plan.overlaps if pair[0] not in repaired]
+    return {'status': status, 'changed_rows': sorted(repaired),
+            'remaining_overlaps': len(remaining),
+            'remaining_rows': sorted({row for pair in remaining for row in pair})}
+
+
+def record_transcription_timing(task, original_path, output_path, plan):
+    """Prepare publication metadata; the caller still owns the ASR run/write."""
+    records = copy.deepcopy(task.get('subtitle_timing_versions') or [])
+    for record in records:
+        if record['id'] == task.get('subtitle_timing_active'):
+            record['status'] = 'superseded'
+    updates = {'subtitle_timing_active': None, 'subtitle_timing_versions': records,
+               'subtitle_timing_summary': timing_summary(plan)}
+    if plan.changes:
+        operation = uuid4().hex
+        records.append({'id': operation, 'status': 'applied', 'automatic': True,
+            'before': {'source': str(original_path)}, 'after': {'source': str(output_path)},
+            'before_hashes': {'source': _hash(Path(original_path).read_bytes())},
+            'after_hashes': {'source': _hash(Path(output_path).read_bytes())},
+            'changes': [asdict(change) for change in plan.changes]})
+        updates.update(subtitle_timing_active=operation,
+                       subtitle_timing_revision=task.get('subtitle_timing_revision', 0) + 1)
+    return updates
+
+
 def write_subtitle_snapshot(root: Path, data: bytes) -> str:
     root.mkdir(parents=True, exist_ok=True)
     path = root / f'subtitle-version-{uuid4().hex}.json'
@@ -116,6 +144,46 @@ class SubtitleTimingVersions:
                 'overlaps': plan.overlaps, 'issues': [asdict(issue) for issue in plan.issues],
                 'active_version': task.get('subtitle_timing_active')}
 
+    def include_generated_translation(self, task, language, output_path, data):
+        """Extend an untouched automatic undo point before publishing a translation.
+
+        Generated text is retained when reverting timing. Never rebase a point
+        over any human/file edits, or a changed set of previously bound tracks.
+        The translation caller owns task exclusion; it publishes these records
+        together with the new translation binding.
+        """
+        records = copy.deepcopy(task.get('subtitle_timing_versions') or [])
+        record = next((r for r in records if r['id'] == task.get('subtitle_timing_active')), None)
+        if not record or not record.get('automatic') or record['status'] != 'applied':
+            return {}
+        try:
+            loaded, _digest, _plan = self._load(task)
+        except (OSError, ValueError):
+            # An unavailable old track must not prevent regenerating it.
+            # Keep the old checkpoint untouched; undo still verifies all bytes.
+            return {}
+        if set(loaded) != set(record['after']) or any(
+                value[0] != record['after'][role] or _hash(value[1]) != record['after_hashes'][role]
+                for role, value in loaded.items()):
+            return {}
+        document = json.loads(data)
+        source = loaded['source'][2]['segments']
+        rows = document['segments']
+        if len(rows) != len(source) or any((row['start'], row['end']) != (src['start'], src['end'])
+                                          for row, src in zip(rows, source)):
+            return {}
+        restored = copy.deepcopy(document)
+        for change in record['changes']:
+            restored['segments'][change['index']]['end'] = change['end']
+        encoded = json.dumps(restored, ensure_ascii=False, indent=4, allow_nan=False).encode('utf-8')
+        before_path = write_subtitle_snapshot(self.root, encoded)
+        for role in ('selected', f'language:{language}'):
+            record['before'][role] = before_path
+            record['after'][role] = str(output_path)
+            record['before_hashes'][role] = _hash(encoded)
+            record['after_hashes'][role] = _hash(data)
+        return {'subtitle_timing_versions': records}
+
     @staticmethod
     def _point(task, paths):
         task = copy.deepcopy(task)
@@ -190,7 +258,7 @@ class SubtitleTimingVersions:
         updates = self._invalidate(task, after)
         updates.update(subtitle_timing_active=operation,
             subtitle_timing_revision=task.get('subtitle_timing_revision', 0) + 1,
-            subtitle_timing_versions=[*records, record])
+            subtitle_timing_versions=[*records, record], subtitle_timing_summary=timing_summary(plan))
         return self._publish(task, digest, updates)
 
     def undo(self, task_id, revision, operation):
@@ -216,5 +284,6 @@ class SubtitleTimingVersions:
         record.update(status='undone', restored=restored)
         updates = self._invalidate(task, restored)
         updates.update(subtitle_timing_active=None,
-            subtitle_timing_revision=task.get('subtitle_timing_revision', 0) + 1, subtitle_timing_versions=records)
+            subtitle_timing_revision=task.get('subtitle_timing_revision', 0) + 1, subtitle_timing_versions=records,
+            subtitle_timing_summary={**(task.get('subtitle_timing_summary') or {}), 'status': 'undone'})
         return self._publish(task, digest, updates)

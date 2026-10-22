@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -13,7 +14,8 @@ from app.core.file_security import MEDIA_EXTENSIONS, MAX_MEDIA_BYTES, save_uploa
 from app.services.asr_service import asr_service
 from app.services.audio_service import audio_service
 from app.services.chunking_service import chunking_service, deduplicate_segments, bound_segments_to_duration
-from app.services.subtitle_timing_versions import write_subtitle_snapshot
+from app.services.subtitle_timing_versions import write_subtitle_snapshot, record_transcription_timing
+from app.services.subtitle_timing import plan_subtitle_timing, apply_timing_plan
 
 router = APIRouter()
 
@@ -99,16 +101,28 @@ async def run_transcription_task(
         prior_task = history_manager.get_task(task_id) or {}
         originals = list(prior_task.get('transcription_original_versions') or [])
         originals.append(original_path)
-        output_filename = f"{Path(filename).stem}_transcription_{task_id}"
+        timing_plan = plan_subtitle_timing(transcription_result)
+        if prior_task.get('translation_path') or prior_task.get('translations'):
+            # Recovery with existing translations must not retime only source.
+            # Normal new tasks/retries have no translation binding yet.
+            timing_plan = replace(timing_plan, changes=())
+        if timing_plan.changes:
+            transcription_result = apply_timing_plan(transcription_result, (), timing_plan)[0]
+        output_filename = f"{Path(filename).stem}_transcription_{task_id}_{Path(original_path).stem[-32:]}"
+        if timing_plan.changes:
+            output_filename = f"subtitle-version-{task_id}-{Path(original_path).stem[-32:]}"
         output_path = asr_service.save_to_json(transcription_result, output_filename)
+        timing_updates = record_transcription_timing(prior_task, original_path, output_path, timing_plan)
 
         # 4. Update history
         history_manager.update_task(
             task_id, {"status": "transcribed", "transcription_path": str(output_path), "language": transcription_result.language,
                       "transcription_original_path": original_path, "transcription_original_versions": originals,
-                      "transcription_duration": duration, "subtitle_timing_active": None}
+                      "transcription_duration": duration, **timing_updates}
         )
-        emit_event(task_id, {"status": "transcribed", "message": "转录完成！", "progress_percent": 100, "transcription_path": str(output_path), "language": transcription_result.language})
+        emit_event(task_id, {"status": "transcribed", "message": "转录完成！", "progress_percent": 100, "transcription_path": str(output_path), "language": transcription_result.language,
+                             "subtitle_timing_active": timing_updates['subtitle_timing_active'],
+                             "subtitle_timing_summary": timing_updates['subtitle_timing_summary']})
 
     except Exception as e:
         error_msg = str(e)

@@ -14,6 +14,7 @@ TASK_EVENT_FIELDS = (
     "failed_stage", "cancelled_stage", "dubbing_status", "burn_status", "gpu_stage",
     "burn_error", "video_codec", "video_encoder", "pipeline_run_id",
     "pipeline_cleanup_pending", "state_revision", "translation_reviews", "translation_review_language", "dubbing_review",
+    "subtitle_timing_active", "subtitle_timing_summary",
 )
 
 

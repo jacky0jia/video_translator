@@ -12,12 +12,14 @@ import subprocess
 import tempfile
 import time
 import wave
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from app.services.tts.base import TTSCancelled
 from app.services.tts.qwen_voices import QwenVoiceCatalog
+from app.workers.tts_diagnostics import TTSDiagnostics
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -218,6 +220,7 @@ class LlamaTTSWorkerClient:
                 device = "cpu"
                 fallback_reason = str(exc)
         self._artifacts, self._voices, self._device = artifacts, voices, device
+        self._diagnostic_model_sha = worker_config["model_sha256"]
         self._report(
             actual_device=None,
             requested_device=worker_config.get("device", "cuda"),
@@ -282,23 +285,36 @@ class LlamaTTSWorkerClient:
                 + environment.get("PATH", "")
             )
             creation_flags = 0x08000000 if os.name == "nt" else 0
+            diagnostic = TTSDiagnostics()
+            context = {
+                "attempt_id": uuid.uuid4().hex, "device": self._device,
+                "characters": len(normalized_text), "language": normalized_language,
+                "voice": voice.id, "timeout_seconds": timeout or self.request_timeout,
+                "runtime": self._artifacts.runtime_version if re.fullmatch(r'[A-Za-z0-9._-]{1,64}', self._artifacts.runtime_version) else 'unknown',
+                "model_sha256": self._diagnostic_model_sha,
+            }
+            logger.info("llama-tts diagnostic %s", json.dumps(dict(context, event="start")))
             try:
                 process = await self._process_factory(
                     *arguments,
                     cwd=temp,
                     env=environment,
                     stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
                     creationflags=creation_flags,
                 )
             except asyncio.CancelledError:
                 self._report(state="cancelled")
+                logger.info("llama-tts diagnostic %s", json.dumps(dict(context, event="finish", outcome="cancelled", elapsed_seconds=round(time.monotonic()-diagnostic.started, 3))))
                 raise
             except OSError as exc:
                 self._report(state="failed")
+                logger.info("llama-tts diagnostic %s", json.dumps(dict(context, event="finish", outcome="start_failed", elapsed_seconds=round(time.monotonic()-diagnostic.started, 3), os_error=exc.errno)))
                 raise LlamaTTSExecutionError(f"llama-tts could not start (OS error {exc.errno})") from exc
             self._process = process
+            reader = asyncio.create_task(diagnostic.drain(getattr(process, 'stdout', None)), name='tts-diagnostic-reader')
+            outcome = "failed"
             try:
                 await self._wait(process, timeout or self.request_timeout, should_cancel)
                 if process.returncode != 0:
@@ -310,16 +326,28 @@ class LlamaTTSWorkerClient:
                 except RuntimeError as exc:
                     raise LlamaTTSExecutionError(str(exc)) from exc
                 self._report(state="succeeded")
+                outcome = "succeeded"
                 return audio
             except (TTSCancelled, asyncio.CancelledError):
                 self._report(state="cancelled")
+                outcome = "cancelled"
+                raise
+            except TimeoutError:
+                self._report(state="failed")
+                outcome = "timeout"
                 raise
             except Exception:
                 self._report(state="failed")
                 raise
             finally:
-                await self._terminate(process)
-                self._process = None
+                try:
+                    await self._terminate(process)
+                finally:
+                    try:
+                        await diagnostic.finish(reader)
+                    finally:
+                        self._process = None
+                        logger.info("llama-tts diagnostic %s", json.dumps(dict(context, **diagnostic.metrics, event="finish", outcome=outcome, elapsed_seconds=round(time.monotonic()-diagnostic.started, 3), returncode=process.returncode)))
 
     def _arguments(
         self, text: str, language: str, reference: Path, output: Path

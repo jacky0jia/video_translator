@@ -283,30 +283,6 @@ class DubbingService:
         )
         return result.audio
 
-    async def _fetch_voice_fallbacks(self, primary_voice: str, adapter) -> List[str]:
-        """Fetch voices sharing the same language as ``primary_voice`` (excluding it).
-
-        Used to gracefully fall back when a specific voice crashes the TTS
-        server mid-synthesis (e.g. some Kokoro voices trigger Speaches bugs).
-        Returns an empty list on any failure (fallback simply disabled).
-        """
-        try:
-            voices = await adapter.list_voices()
-            primary = next(
-                (voice for voice in voices if voice.id == primary_voice or voice.name == primary_voice),
-                None,
-            )
-            primary_lang = primary.language if primary else ""
-            if not primary_lang:
-                return []
-            return [
-                voice.id
-                for voice in voices
-                if voice.id and voice.id != primary_voice and voice.language == primary_lang
-            ]
-        except Exception as e:
-            logger.warning(f"Failed to fetch voice fallbacks: {e}")
-            return []
 
     async def _synthesize_all(
         self,
@@ -320,9 +296,7 @@ class DubbingService:
     ) -> List[Path]:
         """Reuse unchanged raw speech and synthesize changed utterances sequentially.
 
-        If a voice fails after retries (e.g. server crash on a specific voice),
-        automatically falls back to other voices of the same language. Once a
-        fallback voice succeeds it is used for all remaining segments.
+        Preserve the selected voice throughout; synthesis failure stops the task.
         """
         raw_paths: List[Path] = []
         total = len(segments)
@@ -340,12 +314,10 @@ class DubbingService:
         adapter = self.tts_registry.create(provider)
         if provider == "speaches" and client is not None:
             adapter.bind_client(client)
-        effective_voice = voice
         stage_lifecycle = self._gpu_lifecycle if provider == "qwen" else self._lifecycle
         started = False
         reused = 0
         synthesized = 0
-        fallback_voices = []
         try:
             for i, seg in enumerate(segments):
                 self._check_cancelled(task_id)
@@ -357,65 +329,36 @@ class DubbingService:
                     raw_paths.append(placeholder)
                     continue
 
-                wav_bytes = cache.get(text, effective_voice)
-                if wav_bytes is None and not started:
-                    started = True
-                    await stage_lifecycle.startup(task_id=task_id, stage="tts", provider=provider)
-                    if provider != "edge":
-                        fallback_voices = await self._fetch_voice_fallbacks(voice, adapter)
-                # Cache entries are keyed by the actual voice, including fallbacks.
-                voices_to_try = [effective_voice] + [
-                    v for v in fallback_voices if v != effective_voice
-                ]
-                last_err: Optional[Exception] = None
+                wav_bytes = cache.get(text, voice)
                 was_cached = wav_bytes is not None
-                for try_voice in ([] if was_cached else voices_to_try):
+                if wav_bytes is None:
+                    if not started:
+                        started = True
+                        await stage_lifecycle.startup(task_id=task_id, stage="tts", provider=provider)
                     try:
-                        wav_bytes = cache.get(text, try_voice)
-                        was_cached = wav_bytes is not None
-                        if wav_bytes is None:
-                            wav_bytes = await self._synthesize_one(
-                                client,
-                                text,
-                                try_voice,
-                                speed,
-                                provider,
-                                adapter=adapter,
-                                should_cancel=lambda: bool(
-                                    self._cancel_events.get(task_id)
-                                    and self._cancel_events[task_id].is_set()
-                                ),
-                                language=language,
-                            )
-                            self._check_cancelled(task_id)
-                            # A first local run may download model assets. Store
-                            # against their final identity, not the missing files.
-                            if synthesized == 0:
-                                cache = SpeechCache(settings.TEMP_DIR / task_id / "speech-cache",
-                                                    synthesis_context(provider), speed=speed, language=language)
-                            cache.put(text, try_voice, wav_bytes)
-                        if try_voice != effective_voice:
-                            logger.warning(
-                                f"Segment {i + 1}/{total}: switched to fallback voice "
-                                f"'{try_voice}' (primary '{voice}' failed)"
-                            )
-                            effective_voice = try_voice  # switch permanently
-                        break
+                        wav_bytes = await self._synthesize_one(
+                            client, text, voice, speed, provider, adapter=adapter,
+                            should_cancel=lambda: bool(
+                                self._cancel_events.get(task_id)
+                                and self._cancel_events[task_id].is_set()
+                            ),
+                            language=language,
+                        )
                     except TTSCancelled as exc:
                         raise DubbingCancelled(str(exc)) from exc
                     except DubbingCancelled:
                         raise
-                    except RuntimeError as e:
-                        last_err = e
-                        logger.warning(
-                            f"Segment {i + 1}/{total}: voice '{try_voice}' failed: {e}"
-                        )
-                        continue
-
-                if wav_bytes is None:
-                    raise last_err or RuntimeError(
-                        f"All voices failed for segment {i + 1}/{total}"
-                    )
+                    except (RuntimeError, TimeoutError) as exc:
+                        raise RuntimeError(
+                            f"Segment {i + 1}/{total}: selected voice '{voice}' failed: {exc}. "
+                            "Dubbing stopped without changing voice. Retry or choose another voice."
+                        ) from exc
+                    self._check_cancelled(task_id)
+                    # Store against final model identity after any first-run download.
+                    if synthesized == 0:
+                        cache = SpeechCache(settings.TEMP_DIR / task_id / "speech-cache",
+                                            synthesis_context(provider), speed=speed, language=language)
+                    cache.put(text, voice, wav_bytes)
 
                 raw_path = temp_dir / f"raw_{i:06d}.wav"
                 with open(raw_path, "wb") as f:

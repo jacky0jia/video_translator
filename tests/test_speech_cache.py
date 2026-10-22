@@ -114,7 +114,6 @@ class SelectiveSynthesisTests(unittest.IsolatedAsyncioTestCase):
         self.service._lifecycle = self.lifecycle
         self.service._gpu_lifecycle = self.lifecycle
         self.service._synthesize_one = AsyncMock(return_value=audio_bytes())
-        self.service._fetch_voice_fallbacks = AsyncMock(return_value=[])
 
     async def run_speech(self, root, segments, task="one", voice="voice", speed=1, language="Chinese", provider="edge"):
         work = root / "work"
@@ -185,17 +184,40 @@ class SelectiveSynthesisTests(unittest.IsolatedAsyncioTestCase):
                 await self.run_speech(root, rows)
             self.service._synthesize_one.assert_not_awaited()
 
-    async def test_fallback_audio_cannot_be_reused_as_the_primary_voice(self):
+    async def test_selected_voice_failure_never_uses_other_voice_or_legacy_fallback_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.service._fetch_voice_fallbacks.return_value = ["fallback"]
+            cache = SpeechCache(root / "one" / "speech-cache", synthesis_context("kokoro"), speed=1, language="Chinese")
+            cache.put("First.", "fallback", audio_bytes())
             self.service._synthesize_one.side_effect = [RuntimeError("primary failed"), audio_bytes()]
-            await self.run_speech(root, [SimpleNamespace(text="First.")], provider="kokoro")
+            with self.assertRaisesRegex(RuntimeError, "Segment 1/1: selected voice 'voice' failed: primary failed"):
+                await self.run_speech(root, [SimpleNamespace(text="First.")], provider="kokoro")
+            self.service._synthesize_one.assert_awaited_once()
+            self.assertEqual(self.service._synthesize_one.await_args.args[2], "voice")
+            self.assertFalse((root / "work" / "raw_000000.wav").exists())
             self.service._synthesize_one.reset_mock()
             self.service._synthesize_one.side_effect = None
             await self.run_speech(root, [SimpleNamespace(text="First.")], provider="kokoro")
             self.service._synthesize_one.assert_awaited_once()
             self.assertEqual(self.service._synthesize_one.await_args.args[2], "voice")
+
+    async def test_mid_task_timeout_stops_later_segments_and_retry_keeps_completed_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = [SimpleNamespace(text=text) for text in ("First.", "Second.", "Third.")]
+            self.service._synthesize_one.side_effect = [audio_bytes(), TimeoutError("timed out after 180s"), audio_bytes()]
+            with self.assertRaisesRegex(RuntimeError, "Segment 2/3: selected voice 'voice' failed: timed out after 180s"):
+                await self.run_speech(root, rows, provider="qwen")
+            self.assertEqual(self.service._synthesize_one.await_count, 2)
+            self.assertTrue(all(call.args[2] == "voice" for call in self.service._synthesize_one.await_args_list))
+            self.assertFalse((root / "work" / "raw_000002.wav").exists())
+            self.adapter.close.assert_awaited_once()
+            self.lifecycle.shutdown.assert_awaited_once()
+            self.service._synthesize_one.reset_mock()
+            self.service._synthesize_one.side_effect = None
+            await self.run_speech(root, rows, provider="qwen")
+            self.assertEqual([call.args[1] for call in self.service._synthesize_one.await_args_list], ["Second.", "Third."])
+            self.assertTrue(all(call.args[2] == "voice" for call in self.service._synthesize_one.await_args_list))
 
     async def test_compression_retry_reuses_speech_after_cleanup_and_rebuilds_real_track_and_video(self):
         self.service.ffmpeg_path = settings.ffmpeg_path

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../contexts/I18nContext';
 import EmptyWorkflowState from './EmptyWorkflowState';
+import OutputMediaPreview from './OutputMediaPreview';
 
 const SUBTITLE_PREVIEW_BYTES = 256 * 1024;
 
@@ -96,8 +97,7 @@ function ExportItem({ item, t }) {
       {!url ? <p role="alert" className="text-sm text-rose-600">{t('previewUnavailable')}</p> :
         item.type === 'subtitle' ? <SubtitlePreview path={url} t={t} /> :
           mediaError ? <p role="alert" className="text-sm text-rose-600">{t('previewUnavailable')}</p> :
-            item.type === 'audio' ? <audio controls preload="metadata" src={url} onError={() => setMediaError(true)} className="w-full" aria-label={`${t('preview')} ${item.label}`} /> :
-              <video controls preload="metadata" src={url} onError={() => setMediaError(true)} className="max-h-80 w-full rounded-lg bg-black" aria-label={`${t('preview')} ${item.label}`} />}
+            <OutputMediaPreview type={item.type} src={url} label={item.label} t={t} onError={() => setMediaError(true)} />}
     </div>}
   </div>;
 }

@@ -494,7 +494,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           )}
         </button>
         <div
-          className="absolute left-1/2 z-[9999] -translate-x-1/2 text-center pointer-events-none break-words"
+          className="absolute left-1/2 z-10 -translate-x-1/2 text-center pointer-events-none break-words"
           data-subtitle-overlay
           style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth * 0.9}px`, height: 0 }}
         >

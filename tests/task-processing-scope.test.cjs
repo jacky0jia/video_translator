@@ -601,6 +601,37 @@ test('language change preserves newer same-stage live progress', async () => {
   assert.equal(h.view.progress, 83); assert.equal(h.view.running, true);
 });
 
+test('dubbing completion event marks Dub done before Render starts', async () => {
+  const h = await ready(activeB());
+  h.event({
+    status: 'dubbing_completed', pipeline_status: 'processing', pipeline_stage: 'pipeline_dubbing',
+    dubbing_status: 'completed', dubbing_target_lang: 'Chinese', progress_percent: 100,
+    dubbing_audio_path: '/static/output/dub.wav',
+    dubbing_raw_video_path: '/static/output/raw.mp4',
+    dubbing_video_path: '/static/output/raw.mp4',
+  });
+  await h.settle();
+  assert.equal(h.view.currentStage, '');
+  assert.equal(h.view.completedStages.includes('dub'), true);
+});
+
+test('a new Dub stage clears the previous live completion evidence', async () => {
+  const h = await ready(activeB());
+  h.event({
+    status: 'dubbing_completed', pipeline_status: 'processing', pipeline_stage: 'pipeline_dubbing',
+    dubbing_status: 'completed', dubbing_target_lang: 'Chinese', progress_percent: 100,
+    dubbing_audio_path: '/static/output/dub.wav', dubbing_video_path: '/static/output/raw.mp4',
+  });
+  await h.settle();
+  h.event({
+    status: 'pipeline_dubbing', pipeline_status: 'processing', pipeline_stage: 'pipeline_dubbing',
+    dubbing_status: 'processing', progress_percent: 0,
+  });
+  await h.settle();
+  assert.equal(h.view.currentStage, 'dub');
+  assert.equal(h.view.completedStages.includes('dub'), false);
+});
+
 test('newer authoritative run can replace an old stopping display', async () => {
   const stopping = { ...activeB(), state_revision: 11, pipeline_status: 'cancelling', pipeline_cleanup_pending: true };
   const h = await ready(stopping);

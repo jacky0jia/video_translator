@@ -60,6 +60,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
   const [message, setMessage] = useTaskScopedState(scope, () => t('readyToProcess'));
   const [status, setStatus] = useTaskScopedState(scope, 'ready');
   const [lastFailedStage, setLastFailedStage] = useTaskScopedState(scope, '');
+  const [liveCompletion, setLiveCompletion] = useTaskScopedState(scope, null);
   const { completionHandledRef, startRequestRef } = scope;
 
   const targetLang = task?.target_lang || 'Chinese';
@@ -71,8 +72,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
     [voices, targetLang],
   );
   const completedStages = useMemo(
-    () => completedStageIds(task, targetLang),
-    [task, targetLang],
+    () => completedStageIds(liveCompletion?.taskId === task?.task_id
+      ? { ...task, ...liveCompletion } : task, targetLang),
+    [task, targetLang, liveCompletion],
   );
 
   useEffect(() => {
@@ -165,6 +167,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
     setStartPending(false);
     setCancelPending(false);
     setLastFailedStage(task?.failed_stage || task?.interrupted_status || '');
+    setLiveCompletion(null);
     completionHandledRef.current = false;
   }, [task?.task_id, t]);
 
@@ -356,6 +359,12 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
       setCurrentStage(event.status === 'burning' ? 'render' : 'translate');
       setMessage(localizedTaskMessage(event, t));
       return;
+    }
+    if (['pipeline_dubbing', 'dubbing'].includes(event.status) && event.dubbing_status !== 'completed') {
+      setLiveCompletion(null);
+    } else if (event.status === 'dubbing_completed'
+        && completedStageIds(event, targetLang).includes('dub')) {
+      setLiveCompletion({ ...event, taskId: task.task_id });
     }
     setProgress(value => stageProgressForEvent(event, value));
     setCurrentStage(value => stageIdForEvent(event, value));

@@ -613,6 +613,9 @@ test('dubbing completion event marks Dub done before Render starts', async () =>
   await h.settle();
   assert.equal(h.view.currentStage, '');
   assert.equal(h.view.completedStages.includes('dub'), true);
+  h.changeLanguage();
+  await h.settle();
+  assert.equal(h.view.completedStages.includes('dub'), true);
 });
 
 test('a new Dub stage clears the previous live completion evidence', async () => {

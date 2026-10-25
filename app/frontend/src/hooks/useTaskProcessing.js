@@ -72,9 +72,9 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
     [voices, targetLang],
   );
   const completedStages = useMemo(
-    () => completedStageIds(liveCompletion?.taskId === task?.task_id
-      ? { ...task, ...liveCompletion } : task, targetLang),
-    [task, targetLang, liveCompletion],
+    () => completedStageIds(liveCompletion?.scope === scope
+      ? { ...task, ...liveCompletion.evidence } : task, targetLang),
+    [task, targetLang, liveCompletion, scope],
   );
 
   useEffect(() => {
@@ -167,7 +167,6 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
     setStartPending(false);
     setCancelPending(false);
     setLastFailedStage(task?.failed_stage || task?.interrupted_status || '');
-    setLiveCompletion(null);
     completionHandledRef.current = false;
   }, [task?.task_id, t]);
 
@@ -364,7 +363,7 @@ export function useTaskProcessing({ task, onTaskRefresh, subtitleStyle: provided
       setLiveCompletion(null);
     } else if (event.status === 'dubbing_completed'
         && completedStageIds(event, targetLang).includes('dub')) {
-      setLiveCompletion({ ...event, taskId: task.task_id });
+      setLiveCompletion({ scope, evidence: event });
     }
     setProgress(value => stageProgressForEvent(event, value));
     setCurrentStage(value => stageIdForEvent(event, value));

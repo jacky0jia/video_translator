@@ -69,6 +69,7 @@ assert.equal(localizedTaskMessage({status:'transcribing', message:'worker diagno
 assert.equal(stageIdForEvent({status: 'switching_model', gpu_stage: 'tts'}, 'translate'), 'dub');
 assert.equal(stageIdForEvent({status: 'waiting_for_gpu', gpu_stage: 'asr'}, ''), 'transcribe');
 assert.equal(stageIdForEvent({status: 'switching_model'}, 'translate'), 'translate');
+assert.equal(stageIdForEvent({status: 'dubbing_completed'}, 'dub'), '');
 
 assert.deepEqual(completedStageIds({transcription_path: '/source.json'}, 'Chinese'), ['transcribe']);
 assert.deepEqual(completedStageIds({

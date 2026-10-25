@@ -25,6 +25,24 @@ class PipelineUiSyncTests(unittest.TestCase):
         self.assertEqual(snapshot["dubbing_status"], "processing")
         self.assertNotIn("ignored", snapshot)
 
+    def test_dubbing_completion_snapshot_contains_artifact_evidence(self):
+        snapshot = _task_event_snapshot({
+            "status": "dubbing_completed",
+            "pipeline_status": "processing",
+            "pipeline_stage": "pipeline_dubbing",
+            "dubbing_status": "completed",
+            "dubbing_target_lang": "Chinese",
+            "dubbing_audio_path": "audio.wav",
+            "dubbing_raw_video_path": "raw-video.mp4",
+            "dubbing_video_path": "video.mp4",
+        })
+
+        self.assertEqual(snapshot["dubbing_status"], "completed")
+        self.assertEqual(snapshot["dubbing_target_lang"], "Chinese")
+        self.assertEqual(snapshot["dubbing_audio_path"], "audio.wav")
+        self.assertEqual(snapshot["dubbing_raw_video_path"], "raw-video.mp4")
+        self.assertEqual(snapshot["dubbing_video_path"], "video.mp4")
+
     def test_frontend_locks_duplicate_start_and_keeps_tracking_conflict(self):
         hook = (ROOT / "app/frontend/src/hooks/useTaskProcessing.js").read_text(encoding="utf-8")
         scope = (ROOT / "app/frontend/src/hooks/useTaskScope.js").read_text(encoding="utf-8")

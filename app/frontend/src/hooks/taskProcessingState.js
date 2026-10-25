@@ -18,6 +18,7 @@ export function stageId(status) {
 }
 
 export function stageIdForEvent(event, currentStage = '') {
+  if (event?.status === 'dubbing_completed') return '';
   return stageId(event?.pipeline_stage)
     || stageId(event?.gpu_stage)
     || stageId(event?.status)

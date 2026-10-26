@@ -145,7 +145,8 @@ class VideoOutputTests(unittest.TestCase):
                 service.burn('one', False, True, {}, output_options={'policy': 'balanced'})
             self.assertEqual(ass.call_args.args[6:8], (2560, 1440))
             cmd = popen.call_args.args[0]
-            self.assertEqual(cmd[cmd.index('-vf') + 1], 'scale=2560:1440,ass=test.ass')
+            self.assertEqual(cmd[cmd.index('-vf') + 1],
+                             'scale=2560:1440,subtitles=test.ass:wrap_unicode=1')
             self.assertIn('passthrough', cmd)
             self.assertNotIn('-r', cmd)
 

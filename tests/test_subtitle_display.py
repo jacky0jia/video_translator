@@ -78,12 +78,21 @@ def test_measurement_failure_never_guesses_positions():
     assert measure_subtitle_blocks('', [], {}, 640, 20) == {}
 
 
+def test_measurement_uses_unicode_line_breaking_for_unspaced_cjk():
+    long_cjk = '这是一段没有空格而且需要自动换行的中文字幕用来验证测量高度' * 4
+    block = subtitle_display_blocks([dict(role='target', segments=rows((0, 2, long_cjk)))])['blocks'][0]
+    header = SubtitleFormatter().to_ass(document(rows((3, 4, 'header'))), show_source=False,
+                                        font_size=20, playres_x=640, playres_y=360).split('Dialogue:')[0]
+    heights = measure_subtitle_blocks(header, [block], {block['id']: long_cjk}, 640, 20)
+    assert heights[block['id']] > 50
+
+
 def render_bounds(ass, times):
     with tempfile.TemporaryDirectory() as directory:
         Path(directory, 'fixture.ass').write_text(ass, encoding='utf-8-sig')
         # bbox logs on synthetic black frames. No GPU/model/media input involved.
         result = subprocess.run([settings.ffmpeg_path, '-hide_banner', '-nostdin', '-filter_threads', '1',
-            '-f', 'lavfi', '-i', 'color=c=black:s=640x360:r=1', '-vf', 'ass=fixture.ass,bbox=min_val=32',
+            '-f', 'lavfi', '-i', 'color=c=black:s=640x360:r=1', '-vf', 'subtitles=fixture.ass:wrap_unicode=1,bbox=min_val=32',
             '-frames:v', str(max(times) + 1), '-threads', '1', '-f', 'null', '-'], cwd=directory,
             capture_output=True, check=True, timeout=30)
     bounds = {}
@@ -95,7 +104,8 @@ def render_bounds(ass, times):
 
 
 def test_real_cpu_libass_new_row_stays_above_after_old_ends():
-    target = document(rows((0, 3, 'First subtitle'), (1, 6, 'Second subtitle with enough words to wrap. ' * 3)))
+    long_cjk = '这是一段没有空格而且需要自动换行的中文字幕用来验证重叠布局' * 3
+    target = document(rows((0, 3, 'First subtitle'), (1, 6, long_cjk)))
     formatter = SubtitleFormatter()
     ass = formatter.to_ass(target, font_size=20, playres_x=640, playres_y=360)
     dialogues = [line for line in ass.splitlines() if line.startswith('Dialogue:')]

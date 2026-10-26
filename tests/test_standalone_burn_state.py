@@ -154,7 +154,8 @@ def test_api_choices_reach_real_planner_and_ffmpeg_command(saved_task, monkeypat
     assert saved["burn_status"] == "completed"
     for call in popen.call_args_list:
         command = call.args[0]
-        assert command[command.index("-vf") + 1].startswith("scale=1920:1080,ass=")
+        assert command[command.index("-vf") + 1].startswith("scale=1920:1080,subtitles=")
+        assert command[command.index("-vf") + 1].endswith(":wrap_unicode=1")
         assert command[command.index("-b:v") + 1] == "7500000"
     command = popen.call_args.args[0]
     assert command[command.index("-c:v") + 1] == "libx264"

@@ -1,9 +1,9 @@
-import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from app.core.config import settings
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.services.formatter_service import SubtitleFormatter
 
@@ -38,23 +38,22 @@ class SubtitleLayoutTests(unittest.TestCase):
         self.assertIn("Source", ass)
         self.assertNotIn("译文", ass)
 
-    @unittest.skipUnless(shutil.which("ffmpeg"), "CPU subtitle renderer not installed")
-    def test_real_cpu_render_uses_video_width_without_three_line_fold(self):
-        # Explicit software-only lavfi input and rawvideo output: no model or GPU.
-        ass = SubtitleFormatter().to_ass(result(TEXT), show_source=False, font_size=18, playres_x=1920, playres_y=1080)
+    def test_bundled_libass_wraps_long_unspaced_chinese_inside_video(self):
+        text = "这是一段没有任何空格而且明显超过普通字幕长度的中文测试文字用来确认自动换行始终有效这是一段没有任何空格而且明显超过普通字幕长度的中文测试文字用来确认自动换行始终有效"
+        width, height = 854, 480
+        ass = SubtitleFormatter().to_ass(result(text), show_source=False, font_size=18, playres_x=width, playres_y=height)
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "fixture.ass").write_text(ass, encoding="utf-8")
             frame = subprocess.run([
-                shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=1920x1080",
-                "-vf", "ass=fixture.ass", "-frames:v", "1", "-threads", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
+                settings.ffmpeg_path, "-v", "error", "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}",
+                "-vf", "subtitles=fixture.ass:wrap_unicode=1", "-frames:v", "1", "-threads", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
             ], cwd=directory, check=True, capture_output=True, timeout=30).stdout
         pixels = [index // 3 for index in range(0, len(frame), 3)
                   if frame[index] > 120 and frame[index + 1] > 120 and frame[index + 2] < 100]
         self.assertTrue(pixels, "Subtitle glyphs were not rendered")
-        xs = [pixel % 1920 for pixel in pixels]
-        ys = sorted(set(pixel // 1920 for pixel in pixels))
+        xs = [pixel % width for pixel in pixels]
+        ys = sorted(set(pixel // width for pixel in pixels))
         line_bands = 1 + sum(right - left > 5 for left, right in zip(ys, ys[1:]))
-        self.assertGreater(max(xs) - min(xs), 1920 * 0.75)
-        self.assertLessEqual(line_bands, 2)
-        self.assertGreater(min(xs), 50)
-        self.assertLess(max(xs), 1870)
+        self.assertGreaterEqual(line_bands, 2)
+        self.assertGreater(min(xs), 20)
+        self.assertLess(max(xs), width - 20)

@@ -103,6 +103,7 @@ class VideoBurnRateControlTests(unittest.TestCase):
         self.assertTrue(result.endswith('.mp4'))
         commands = [call.args[0] for call in popen.call_args_list]
         self.assertEqual([cmd[cmd.index('-c:v') + 1] for cmd in commands], ['av1_nvenc', 'libaom-av1'])
+        self.assertTrue(all(cmd[cmd.index('-vf') + 1].endswith('subtitles=note.ass:wrap_unicode=1') for cmd in commands))
         self.assertTrue(any(call.args[1].get('message') == 'software_encoding' for call in event.call_args_list))
         saved_progress = [call.args[1] for call in history.update_task.call_args_list
                           if call.args[1].get('status') == 'burning']
@@ -152,7 +153,7 @@ class VideoBurnRateControlTests(unittest.TestCase):
             output_path = root / "note.mp4"
             process = subprocess.run(
                 [service.ffmpeg_path, "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=5:d=1",
-                 "-vf", f"ass={ass_path.name}", "-c:v", "libx264", "-preset", "ultrafast",
+                 "-vf", f"subtitles={ass_path.name}:wrap_unicode=1", "-c:v", "libx264", "-preset", "ultrafast",
                  "-an", str(output_path)],
                 cwd=root, capture_output=True, text=True,
             )
@@ -184,7 +185,7 @@ class VideoBurnRateControlTests(unittest.TestCase):
                 playres_x=320, playres_y=180, end_note_enabled=True, video_duration=1, dubbed=True)
             output = root / 'av1.mp4'
             command = [service.ffmpeg_path, '-hide_banner', '-y', '-f', 'lavfi', '-i',
-                       'testsrc2=s=320x180:r=10:d=1', '-vf', f'ass={ass.name}',
+                       'testsrc2=s=320x180:r=10:d=1', '-vf', f'subtitles={ass.name}:wrap_unicode=1',
                        *encode_args('libaom-av1', 300000), '-an', str(output)]
             process = subprocess.run(command, cwd=root, capture_output=True, timeout=30)
             self.assertEqual(process.returncode, 0, process.stderr[-1000:])

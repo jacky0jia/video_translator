@@ -4,7 +4,7 @@
 
 **Goal:** Keep long burned-in subtitles fully inside the video by restoring libass width-constrained wrapping.
 
-**Architecture:** Generate ordinary bottom-aligned ASS dialogue without fixed `\pos` coordinates. Keep source and translated rows in one styled dialogue and rely on libass for real-font wrapping and collision handling.
+**Architecture:** Keep the stable ASS placement model and render through FFmpeg's Unicode-aware `subtitles` filter. Use the same renderer for overlap height measurement so layout and final burn agree.
 
 **Tech Stack:** Python, ASS/libass, bundled FFmpeg, pytest
 
@@ -27,36 +27,37 @@
 
 ---
 
-### Task 1: Restore renderer-managed wrapping
+### Task 1: Enable Unicode-aware renderer wrapping
 
 **Files:**
 - Modify: `tests/test_subtitle_layout.py`
 - Modify: `tests/test_subtitle_display.py`
-- Modify: `app/services/formatter_service.py`
+- Modify: `app/services/video_burn_service.py`
+- Modify: `app/services/subtitle_measurement.py`
 
 **Interfaces:**
 - Consumes: `SubtitleFormatter.to_ass(...) -> str` and `settings.ffmpeg_path`
-- Produces: ASS dialogue anchored by alignment and margins, without `\pos`
+- Produces: Unicode-aware final rendering and overlap measurement while preserving stable `\pos` placement
 
-- [ ] **Step 1: Write the failing render regression test**
+- [x] **Step 1: Write the failing render regression test**
 
-Add a real bundled-FFmpeg test for an overlong unspaced Chinese cue at 854x480. Assert that rendered pixels stay away from both edges and occupy at least two line bands. Update the overlap test to require legible, separate cues rather than fixed coordinates.
+Add a real bundled-FFmpeg test for an overlong unspaced Chinese cue at 854x480. Assert that rendered pixels stay away from both edges and occupy at least two line bands. Add a real measurement test proving the same cue reports multiline height, and assert both hardware and fallback burn commands enable Unicode wrapping.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `python -m pytest tests/test_subtitle_layout.py tests/test_subtitle_display.py -q`
 
-Expected: the long cue reaches the frame edges or remains one line under the current fixed-position output.
+Expected: the production burn command lacks Unicode wrapping and overlap measurement reports only one line.
 
-- [ ] **Step 3: Implement normal bottom-aligned ASS dialogue**
+- [x] **Step 3: Enable Unicode-aware rendering**
 
-In `SubtitleFormatter.to_ass`, remove fixed coordinate positioning and rendered-height placement from the final ASS event generation. Convert the existing 80-pixel baseline plus scaled user offset into the style's vertical margin, preserve `WrapStyle: 1`, and emit each display block with bottom alignment so libass applies the horizontal margins and collision handling.
+Render final ASS files with `subtitles=...:wrap_unicode=1` and use the same filter in overlap measurement. Preserve the current formatter positioning and styling.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run the focused Python tests, the full Python suite, frontend tests, and frontend production build. Expected: all pass without warnings attributable to this change.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit the formatter and regression tests with a message describing restored libass wrapping.
 

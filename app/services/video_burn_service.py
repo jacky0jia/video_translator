@@ -276,7 +276,7 @@ class VideoBurnService:
             def video_filter():
                 scale = (f"scale={video_width}:{video_height}," if
                          (video_width, video_height) != (source_profile['width'], source_profile['height']) else '')
-                return scale + f"ass={ass_path.name}"
+                return scale + f"subtitles={ass_path.name}:wrap_unicode=1"
             logger.info(
                 "Burn quality: source=%s encoder=%s args=%s",
                 source_profile,

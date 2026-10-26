@@ -39,7 +39,7 @@ def measure_subtitle_blocks(header, blocks, texts, width, max_font):
         Path(directory, 'measure.ass').write_text(header + '\n' + '\n'.join(dialogues), encoding='utf-8-sig')
         command = [settings.ffmpeg_path, '-hide_banner', '-nostdin', '-filter_threads', '1',
                    '-f', 'lavfi', '-i', f'color=c=black:s={width}x{height}:r=1',
-                   '-vf', 'ass=measure.ass,bbox=min_val=32', '-frames:v', str(len(blocks)),
+                   '-vf', 'subtitles=measure.ass:wrap_unicode=1,bbox=min_val=32', '-frames:v', str(len(blocks)),
                    '-an', '-threads', '1', '-f', 'null', '-']
         try:
             completed = subprocess.run(command, cwd=directory, capture_output=True, timeout=45,

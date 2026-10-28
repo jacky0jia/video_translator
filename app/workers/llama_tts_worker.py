@@ -168,12 +168,14 @@ class LlamaTTSWorkerClient:
         self,
         *,
         request_timeout: float = 180,
+        absolute_timeout: float = 600,
         poll_interval: float = 0.05,
         process_factory=None,
         status_callback=None,
         vulkan_device_selector=None,
     ):
         self.request_timeout = request_timeout
+        self.absolute_timeout = absolute_timeout
         self.poll_interval = poll_interval
         self._process_factory = process_factory or asyncio.create_subprocess_exec
         self._artifacts: LlamaTTSArtifactSet | None = None
@@ -286,10 +288,11 @@ class LlamaTTSWorkerClient:
             )
             creation_flags = 0x08000000 if os.name == "nt" else 0
             diagnostic = TTSDiagnostics()
+            stall_timeout = self.request_timeout if timeout is None else timeout
             context = {
                 "attempt_id": uuid.uuid4().hex, "device": self._device,
                 "characters": len(normalized_text), "language": normalized_language,
-                "voice": voice.id, "timeout_seconds": timeout or self.request_timeout,
+                "voice": voice.id, "timeout_seconds": stall_timeout,
                 "runtime": self._artifacts.runtime_version if re.fullmatch(r'[A-Za-z0-9._-]{1,64}', self._artifacts.runtime_version) else 'unknown',
                 "model_sha256": self._diagnostic_model_sha,
             }
@@ -316,7 +319,11 @@ class LlamaTTSWorkerClient:
             reader = asyncio.create_task(diagnostic.drain(getattr(process, 'stdout', None)), name='tts-diagnostic-reader')
             outcome = "failed"
             try:
-                await self._wait(process, timeout or self.request_timeout, should_cancel)
+                await self._wait(
+                    process, stall_timeout=stall_timeout,
+                    absolute_timeout=self.absolute_timeout,
+                    should_cancel=should_cancel, diagnostic=diagnostic,
+                )
                 if process.returncode != 0:
                     raise LlamaTTSExecutionError(
                         f"llama-tts exited with code {process.returncode}"
@@ -389,16 +396,29 @@ class LlamaTTSWorkerClient:
     async def _wait(
         self,
         process,
-        timeout: float,
+        *,
+        stall_timeout: float,
+        absolute_timeout: float,
         should_cancel: Callable[[], bool] | None,
+        diagnostic: TTSDiagnostics,
     ) -> None:
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        stall_deadline = started + stall_timeout
+        absolute_deadline = started + absolute_timeout
+        last_frames = 0
         while process.returncode is None:
             if should_cancel and should_cancel():
                 raise TTSCancelled("llama-tts synthesis was cancelled; process recycled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"llama-tts synthesis timed out after {timeout:g}s")
+            now = time.monotonic()
+            if now >= absolute_deadline:
+                raise TimeoutError(f"llama-tts synthesis timed out: absolute runtime exceeded {absolute_timeout:g}s")
+            frames = diagnostic.metrics.get("frames")
+            if isinstance(frames, int) and frames > last_frames:
+                last_frames = frames
+                stall_deadline = now + stall_timeout
+            if now >= stall_deadline:
+                raise TimeoutError(f"llama-tts synthesis timed out: no progress for {stall_timeout:g}s")
+            remaining = min(stall_deadline, absolute_deadline) - now
             try:
                 await asyncio.wait_for(process.wait(), min(self.poll_interval, remaining))
             except asyncio.TimeoutError:

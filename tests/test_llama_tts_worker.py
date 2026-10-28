@@ -13,6 +13,7 @@ from app.workers.llama_tts_worker import (
     LlamaTTSArtifactError, LlamaTTSArtifactSet, LlamaTTSWorkerClient,
     select_amd_vulkan_device,
 )
+from app.workers.tts_diagnostics import TTSDiagnostics
 
 
 def sha256(path: Path) -> str:
@@ -70,6 +71,91 @@ class FakeProcess:
 
     def kill(self):
         self.killed, self.blocked, self.returncode = True, False, -9
+
+
+class ProgressProcess(FakeProcess):
+    """Advance a local clock and parsed diagnostics at each worker poll."""
+
+    def __init__(self, clock, diagnostic, steps, *, succeeds_at=None):
+        super().__init__(blocked=True)
+        self.clock, self.diagnostic = clock, diagnostic
+        self.steps = iter(steps)
+        self.succeeds_at = succeeds_at
+
+    async def wait(self):
+        if self.returncode is not None:
+            return self.returncode
+        elapsed, frames = next(self.steps)
+        self.clock["now"] = elapsed
+        if frames is not None:
+            self.diagnostic.line(f"frames generated: {frames}, speed: 1 frames/s".encode())
+        if self.succeeds_at is not None and elapsed >= self.succeeds_at:
+            self.returncode = 0
+            return self.returncode
+        raise asyncio.TimeoutError
+
+
+class LlamaTTSWaitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_increasing_frames_keep_request_alive_beyond_stall_window(self):
+        clock, diagnostic = {"now": 0}, TTSDiagnostics()
+        process = ProgressProcess(clock, diagnostic, [(1, 10), (2, 20), (3, 30), (4, 40)],
+                                  succeeds_at=4)
+        client = LlamaTTSWorkerClient(poll_interval=1)
+        with patch("app.workers.llama_tts_worker.time", SimpleNamespace(monotonic=lambda: clock["now"])):
+            await client._wait(process, stall_timeout=2, absolute_timeout=10,
+                               should_cancel=None, diagnostic=diagnostic)
+        self.assertEqual(clock["now"], 4)
+        self.assertEqual(process.returncode, 0)
+
+    async def test_unchanged_or_decreasing_frames_do_not_refresh_stall_deadline(self):
+        for frames in ([10, 10, 10], [10, 9, 10]):
+            with self.subTest(frames=frames):
+                clock, diagnostic = {"now": 0}, TTSDiagnostics()
+                process = ProgressProcess(clock, diagnostic, list(enumerate(frames, 1)))
+                client = LlamaTTSWorkerClient(poll_interval=1)
+                with patch("app.workers.llama_tts_worker.time", SimpleNamespace(monotonic=lambda: clock["now"])):
+                    with self.assertRaisesRegex(TimeoutError, "no progress"):
+                        await client._wait(process, stall_timeout=2, absolute_timeout=10,
+                                           should_cancel=None, diagnostic=diagnostic)
+                self.assertEqual(clock["now"], 3)
+
+    async def test_missing_frame_metrics_reach_stall_deadline(self):
+        clock, diagnostic = {"now": 0}, TTSDiagnostics()
+        process = ProgressProcess(clock, diagnostic, [(1, None), (2, None)])
+        client = LlamaTTSWorkerClient(poll_interval=1)
+        with patch("app.workers.llama_tts_worker.time", SimpleNamespace(monotonic=lambda: clock["now"])):
+            with self.assertRaisesRegex(TimeoutError, "no progress"):
+                await client._wait(process, stall_timeout=2, absolute_timeout=10,
+                                   should_cancel=None, diagnostic=diagnostic)
+        self.assertEqual(clock["now"], 2)
+
+    async def test_continuous_progress_still_reaches_absolute_deadline(self):
+        clock, diagnostic = {"now": 0}, TTSDiagnostics()
+        process = ProgressProcess(clock, diagnostic, [(1, 10), (2, 20), (3, 30)])
+        client = LlamaTTSWorkerClient(poll_interval=1)
+        with patch("app.workers.llama_tts_worker.time", SimpleNamespace(monotonic=lambda: clock["now"])):
+            with self.assertRaisesRegex(TimeoutError, "absolute runtime"):
+                await client._wait(process, stall_timeout=2, absolute_timeout=3,
+                                   should_cancel=None, diagnostic=diagnostic)
+        self.assertEqual(clock["now"], 3)
+
+    async def test_absolute_deadline_wins_when_both_deadlines_expire(self):
+        clock, diagnostic = {"now": 0}, TTSDiagnostics()
+        process = ProgressProcess(clock, diagnostic, [(2, None)])
+        client = LlamaTTSWorkerClient(poll_interval=2)
+        with patch("app.workers.llama_tts_worker.time", SimpleNamespace(monotonic=lambda: clock["now"])):
+            with self.assertRaisesRegex(TimeoutError, "absolute runtime"):
+                await client._wait(process, stall_timeout=2, absolute_timeout=2,
+                                   should_cancel=None, diagnostic=diagnostic)
+
+    async def test_cancellation_wins_when_both_deadlines_expire(self):
+        clock, diagnostic = {"now": 0}, TTSDiagnostics()
+        process = ProgressProcess(clock, diagnostic, [(2, None)])
+        client = LlamaTTSWorkerClient(poll_interval=2)
+        with patch("app.workers.llama_tts_worker.time", SimpleNamespace(monotonic=lambda: clock["now"])):
+            with self.assertRaises(TTSCancelled):
+                await client._wait(process, stall_timeout=2, absolute_timeout=2,
+                                   should_cancel=lambda: clock["now"] >= 2, diagnostic=diagnostic)
 
 
 class LlamaTTSArtifactTests(unittest.TestCase):
@@ -379,12 +465,35 @@ class LlamaTTSWorkerTests(unittest.IsolatedAsyncioTestCase):
 
             client = LlamaTTSWorkerClient(process_factory=factory, poll_interval=0.001)
             await client.start(make_bundle(Path(temp)))
-            with self.assertRaisesRegex(TimeoutError, "timed out"):
+            with self.assertRaisesRegex(TimeoutError, "no progress.*0[.]003s"):
                 await client.synthesize(
                     text="超时测试", voice_id="zh_female_1", language="zh", timeout=0.003
                 )
             self.assertTrue(process.killed)
             self.assertFalse(client.running)
+
+    async def test_explicit_stall_timeout_keeps_configured_absolute_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            process = FakeProcess(blocked=True)
+            directories = []
+
+            async def factory(*arguments, **kwargs):
+                directories.append(Path(kwargs["cwd"]))
+                return process
+
+            client = LlamaTTSWorkerClient(
+                process_factory=factory, poll_interval=0.001,
+                request_timeout=0.001, absolute_timeout=0.03,
+            )
+            await client.start(make_bundle(Path(temp)))
+            with self.assertRaisesRegex(TimeoutError, "absolute runtime.*0[.]03s"):
+                await client.synthesize(
+                    text="test", voice_id="zh_female_1", language="zh", timeout=0.2
+                )
+            self.assertTrue(process.killed)
+            self.assertFalse(client.running)
+            self.assertEqual(client.status["state"], "failed")
+            self.assertTrue(all(not path.exists() for path in directories))
 
     async def test_invalid_output_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

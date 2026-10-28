@@ -2,11 +2,11 @@
 
 ## Problem
 
-Each `llama-tts` utterance currently has a fixed 180-second wall-clock
+Historically, each `llama-tts` utterance had a fixed 180-second wall-clock
 deadline. On slower devices or unusually expensive utterances, a healthy
-process can still be generating frames when that deadline expires. The worker
-then terminates the process and reports a synthesis failure even though forward
-progress was being made.
+process could still be generating frames when that deadline expired. The worker
+then terminated the process and reported a synthesis failure even though
+forward progress was being made.
 
 Historical target-machine logs prove that individual attempts reached the
 180-second limit, but predate the numeric TTS diagnostics and therefore cannot

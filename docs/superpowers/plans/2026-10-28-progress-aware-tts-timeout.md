@@ -71,37 +71,26 @@ git add app/workers/llama_tts_worker.py tests/test_llama_tts_worker.py
 git commit -m "fix: keep progressing TTS requests alive"
 ```
 
-### Task 2: Acceptance record and complete verification
+### Task 2: Implementation record and complete verification
 
 **Files:**
-- Modify: `specs/acceptance-issues-20261017.md:42-52`
-- Modify: `tests/test_acceptance_issue_register.py:17-23`
+- Modify: `docs/superpowers/specs/2026-10-28-progress-aware-tts-timeout.md`
 
 **Interfaces:**
 - Consumes: the timeout behavior implemented by Task 1.
-- Produces: a durable acceptance record that preserves the historical 180-second failures and records the new 180-second stall/600-second absolute policy.
+- Produces: a durable implementation record that preserves the historical 180-second failures and records the new 180-second stall/600-second absolute policy.
 
-- [ ] **Step 1: Write the failing acceptance-register assertion**
+- [ ] **Step 1: Update the tracked implementation record**
 
-Require the issue register to state that the historical failures remain valid evidence and that mitigation now uses a 180-second no-progress timeout plus a 600-second absolute ceiling.
+Add an implementation-status section to the tracked design spec. State that the historical failures remain valid evidence and that mitigation now uses a 180-second no-progress timeout plus a 600-second absolute ceiling.
 
-- [ ] **Step 2: Run the acceptance-register test and verify it fails**
+- [ ] **Step 2: Run the focused worker and diagnostics tests**
 
-Run: `python -m pytest tests/test_acceptance_issue_register.py -q`
-
-Expected: FAIL because the mitigation is not yet recorded.
-
-- [ ] **Step 3: Update the acceptance issue record**
-
-Replace only the obsolete statement that timeout extension is deferred; preserve the timestamps and conclusion that the first two attempts genuinely failed.
-
-- [ ] **Step 4: Run the acceptance and focused worker tests**
-
-Run: `python -m pytest tests/test_acceptance_issue_register.py tests/test_llama_tts_worker.py tests/test_tts_diagnostics.py -q`
+Run: `python -m pytest tests/test_llama_tts_worker.py tests/test_tts_diagnostics.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Run complete project verification**
+- [ ] **Step 3: Run complete project verification**
 
 Run:
 
@@ -114,10 +103,10 @@ npm --prefix app/frontend run build
 
 Expected: all Python tests pass (apart from documented skips), all frontend tests pass, and the production build exits successfully.
 
-- [ ] **Step 6: Commit the acceptance record**
+- [ ] **Step 4: Commit the implementation record**
 
 ```bash
-git add specs/acceptance-issues-20261017.md tests/test_acceptance_issue_register.py
+git add docs/superpowers/specs/2026-10-28-progress-aware-tts-timeout.md
 git commit -m "docs: record progress-aware TTS timeout mitigation"
 ```
 

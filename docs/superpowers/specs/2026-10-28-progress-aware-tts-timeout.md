@@ -58,3 +58,12 @@ the behavior safely falls back to the existing 180-second timeout.
 - Update the acceptance issue record to describe the mitigation while keeping
   the historical timeout evidence intact.
 - Run the complete Python suite and frontend tests/build before delivery.
+
+## Implementation status
+
+The historical target-machine failures at 180 seconds remain valid evidence:
+those attempts reached the former fixed deadline, while their logs cannot
+establish whether generation was slow or stalled. The mitigation is now
+implemented: requests time out after 180 seconds without generated-frame
+progress and are also subject to a 600-second absolute runtime ceiling. The
+absolute ceiling applies even while frame counts continue to increase.

@@ -8,9 +8,10 @@ from pathlib import Path
 
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.services.asr_quality import transcribe_checked
+from app.services.asr_segments import split_faster_whisper_segments
 
 
-def _worker_main(connection, model_args, transcribe_args):
+def _worker_main(connection, model_args, transcribe_args, subtitle_segment_seconds):
     model = None
     try:
         from faster_whisper import WhisperModel
@@ -32,11 +33,8 @@ def _worker_main(connection, model_args, transcribe_args):
                 "language": info.language,
                 "language_probability": info.language_probability,
                 "segments": [
-                    {
-                        "start": segment.start, "end": segment.end,
-                        "text": segment.text.strip(), "confidence": segment.avg_logprob,
-                    }
-                    for segment in segments
+                    segment.model_dump(mode="json")
+                    for segment in split_faster_whisper_segments(segments, subtitle_segment_seconds)
                 ],
             })
     except BaseException as exc:
@@ -65,13 +63,16 @@ class ASRWorkerClient:
     def running(self) -> bool:
         return bool(self._process and self._process.is_alive())
 
-    async def start(self, *, model_args: dict, transcribe_args: dict) -> None:
+    async def start(
+        self, *, model_args: dict, transcribe_args: dict, subtitle_segment_seconds: float,
+    ) -> None:
         if self.running:
             raise RuntimeError("ASR worker is already running")
         context = multiprocessing.get_context("spawn")
         parent, child = context.Pipe()
         process = context.Process(
-            target=self._worker_target, args=(child, model_args, transcribe_args),
+            target=self._worker_target,
+            args=(child, model_args, transcribe_args, subtitle_segment_seconds),
             name="subtitle-translator-asr", daemon=True,
         )
         process.start()

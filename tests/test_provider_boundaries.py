@@ -7,6 +7,7 @@ import wave
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from app.core.config import settings
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.core.provider_lifecycle import NoopProviderLifecycle
 from app.services.asr_service import ASRService
@@ -151,11 +152,13 @@ class ProviderBoundaryTests(unittest.IsolatedAsyncioTestCase):
         class Worker:
             def __init__(self):
                 self.started = 0
+                self.start_kwargs = None
                 self.calls = []
                 self.closed = 0
 
             async def start(self, **kwargs):
                 self.started += 1
+                self.start_kwargs = kwargs
 
             async def transcribe(self, audio_path, language):
                 self.calls.append((audio_path, language))
@@ -170,12 +173,21 @@ class ProviderBoundaryTests(unittest.IsolatedAsyncioTestCase):
             service, "_resolve_device_and_compute", return_value=("cuda", "float16")
         ), patch.object(service, "_resolve_model_path", return_value="fixture-model"), patch.object(
             service, "_gpu_memory_snapshot", return_value=None
+        ), patch.object(settings, "ASR_BEAM_SIZE", 7), patch.object(
+            settings, "SUBTITLE_SEGMENT_SECONDS", 4
         ):
             async with service.stage("task-worker"):
                 await service.transcribe(Path("one.wav"))
                 await service.transcribe(Path("two.wav"), "en")
 
         self.assertEqual(worker.started, 1)
+        self.assertEqual(worker.start_kwargs["transcribe_args"], {
+            "beam_size": 7, "task": "transcribe", "chunk_length": 30, "word_timestamps": True,
+        })
+        self.assertEqual(worker.start_kwargs["subtitle_segment_seconds"], 4)
+        self.assertNotIn("subtitle_segment_seconds", worker.start_kwargs["transcribe_args"])
+        self.assertNotIn("vad_filter", worker.start_kwargs["transcribe_args"])
+        self.assertNotIn("hallucination_silence_threshold", worker.start_kwargs["transcribe_args"])
         self.assertEqual(worker.calls, [(Path("one.wav"), None), (Path("two.wav"), "en")])
         self.assertEqual(worker.closed, 1)
         self.assertIsNone(service._worker)

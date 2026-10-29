@@ -58,8 +58,10 @@ class ASRService:
                         transcribe_args={
                             "beam_size": settings.ASR_BEAM_SIZE,
                             "task": "transcribe",
-                            "chunk_length": 30,
+                            "chunk_length": LOCAL_ASR_CONTEXT_SECONDS,
+                            "word_timestamps": True,
                         },
+                        subtitle_segment_seconds=settings.SUBTITLE_SEGMENT_SECONDS,
                     )
                 yield
             finally:

@@ -70,7 +70,7 @@ class ASRQualityTests(unittest.TestCase):
                 transcribe_checked(model, "audio.wav", language="en")
             self.assertEqual(model.transcribe.call_count, 2)
 
-    def test_worker_uses_the_same_quality_check(self):
+    def test_worker_uses_quality_check_and_serializes_split_subtitle_rows(self):
         from app.workers.asr_worker import _worker_main
         connection = Mock()
         connection.recv.side_effect = [
@@ -79,14 +79,62 @@ class ASRQualityTests(unittest.TestCase):
         ]
         model = Mock()
         fake = SimpleNamespace(WhisperModel=Mock(return_value=model))
-        checked = Mock(return_value=([raw()], SimpleNamespace(language="en", language_probability=1)))
+        segment = SimpleNamespace(
+            start=0.0, end=12.0, text=" First second. Third fourth. ", avg_logprob=-0.25,
+            words=[
+                SimpleNamespace(start=0.0, end=3.0, word=" First"),
+                SimpleNamespace(start=3.0, end=6.0, word=" second."),
+                SimpleNamespace(start=6.0, end=9.0, word=" Third"),
+                SimpleNamespace(start=9.0, end=12.0, word=" fourth."),
+            ],
+        )
+        checked = Mock(return_value=([segment], SimpleNamespace(language="en", language_probability=1)))
         with patch.dict("sys.modules", {"faster_whisper": fake}), patch(
             "app.workers.asr_worker.transcribe_checked", checked
         ):
-            _worker_main(connection, {"device": "cpu"}, {"chunk_length": 8})
-        checked.assert_called_once_with(model, "audio.wav", language="en", chunk_length=8)
+            _worker_main(
+                connection, {"device": "cpu"},
+                {"beam_size": 5, "task": "transcribe", "chunk_length": 30, "word_timestamps": True},
+                8,
+            )
+        checked.assert_called_once_with(
+            model, "audio.wav", language="en", beam_size=5, task="transcribe",
+            chunk_length=30, word_timestamps=True,
+        )
+        self.assertEqual(connection.send.call_args_list[1].args[0], {
+            "ok": True, "type": "result", "language": "en", "language_probability": 1,
+            "segments": [
+                {"start": 0.0, "end": 6.0, "text": "First second.", "confidence": -0.25,
+                 "source_text_edited": False},
+                {"start": 6.0, "end": 12.0, "text": "Third fourth.", "confidence": -0.25,
+                 "source_text_edited": False},
+            ],
+        })
         connection.close.assert_called_once()
         model.model.unload_model.assert_called_once()
+
+
+class ASRWorkerStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_start_passes_subtitle_duration_separately_to_process(self):
+        from app.workers.asr_worker import ASRWorkerClient
+
+        context = Mock()
+        parent, child = Mock(), Mock()
+        context.Pipe.return_value = (parent, child)
+        worker = ASRWorkerClient()
+        worker._receive = AsyncMock(return_value={"ok": True, "type": "ready"})
+        model_args = {"device": "cpu"}
+        transcribe_args = {"chunk_length": 30, "word_timestamps": True}
+        with patch("app.workers.asr_worker.multiprocessing.get_context", return_value=context):
+            await worker.start(
+                model_args=model_args, transcribe_args=transcribe_args,
+                subtitle_segment_seconds=4,
+            )
+        self.assertEqual(
+            context.Process.call_args.kwargs["args"], (child, model_args, transcribe_args, 4)
+        )
+        context.Process.return_value.start.assert_called_once()
+        child.close.assert_called_once()
 
 
 class ClearedSubtitleTests(unittest.IsolatedAsyncioTestCase):

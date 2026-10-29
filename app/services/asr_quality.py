@@ -3,6 +3,8 @@ import logging
 import math
 import re
 
+from app.services.asr_segments import LOCAL_ASR_CONTEXT_SECONDS
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,7 +28,7 @@ def transcribe_checked(model, audio_path, *, language=None, **options):
     retry_options = dict(options)
     retry_options.update(
         temperature=0.0, condition_on_previous_text=False,
-        chunk_length=30, repetition_penalty=1.1, no_repeat_ngram_size=6,
+        chunk_length=LOCAL_ASR_CONTEXT_SECONDS, repetition_penalty=1.1, no_repeat_ngram_size=6,
     )
     segments, info = model.transcribe(
         audio_path, language=language or info.language, **retry_options

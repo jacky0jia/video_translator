@@ -45,7 +45,10 @@ class ASRQualityTests(unittest.TestCase):
                 model = Mock()
                 info = SimpleNamespace(language="en")
                 model.transcribe.side_effect = [(iter([first]), info), (iter([raw("Recovered speech")]), info)]
-                segments, _ = transcribe_checked(model, "audio.wav", beam_size=5, chunk_length=8)
+                segments, _ = transcribe_checked(
+                    model, "audio.wav", beam_size=5, chunk_length=30,
+                    word_timestamps=True, initial_prompt="Keep caller context.",
+                )
                 self.assertEqual(segments[0].text, "Recovered speech")
                 options = model.transcribe.call_args.kwargs
                 self.assertEqual(options["language"], "en")
@@ -53,6 +56,10 @@ class ASRQualityTests(unittest.TestCase):
                 self.assertEqual(options["temperature"], 0)
                 self.assertFalse(options["condition_on_previous_text"])
                 self.assertEqual(options["beam_size"], 5)
+                self.assertTrue(options["word_timestamps"])
+                self.assertEqual(options["initial_prompt"], "Keep caller context.")
+                self.assertNotIn("vad_filter", options)
+                self.assertNotIn("hallucination_silence_threshold", options)
 
     def test_persistent_failure_or_empty_retry_is_explicit(self):
         for retry in ([raw(")" * 200)], []):

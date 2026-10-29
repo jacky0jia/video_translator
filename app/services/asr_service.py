@@ -15,6 +15,7 @@ from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.services.hardware_service import hardware_service
 from app.services.asr_quality import transcribe_checked
+from app.services.asr_segments import LOCAL_ASR_CONTEXT_SECONDS, split_faster_whisper_segments
 
 logger = logging.getLogger(__name__)
 
@@ -302,23 +303,17 @@ class ASRService:
             beam_size=settings.ASR_BEAM_SIZE,
             language=language,
             task="transcribe",
-            chunk_length=30,
+            chunk_length=LOCAL_ASR_CONTEXT_SECONDS,
+            word_timestamps=True,
         )
 
         logger.info(
             f"Detected language: {info.language} with probability {info.language_probability:.2f}"
         )
 
-        transcription_segments = []
-        for segment in segments:
-            transcription_segments.append(
-                TranscriptionSegment(
-                    start=segment.start,
-                    end=segment.end,
-                    text=segment.text.strip(),
-                    confidence=segment.avg_logprob,
-                )
-            )
+        transcription_segments = split_faster_whisper_segments(
+            segments, settings.SUBTITLE_SEGMENT_SECONDS
+        )
 
         return TranscriptionResult(
             video_source=str(audio_path),

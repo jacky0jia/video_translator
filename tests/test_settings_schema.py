@@ -35,7 +35,18 @@ class SettingsSchemaTests(unittest.TestCase):
         keys = [item.key for item in SETTING_DEFINITIONS]
         self.assertEqual(len(keys), len(set(keys)))
         schema = get_settings_schema(is_local=True)
-        self.assertEqual(schema["schema_version"], 1)
+        self.assertEqual(schema["schema_version"], 2)
+        self.assertNotIn("ASR_CHUNK_LENGTH", keys)
+        segment = next(field for field in schema["fields"] if field["key"] == "SUBTITLE_SEGMENT_SECONDS")
+        self.assertEqual(segment["default"], 8)
+        self.assertEqual(segment["minimum"], 1)
+        self.assertEqual(segment["maximum"], 30)
+        self.assertEqual(segment["value_type"], "integer")
+        self.assertEqual(segment["order"], 40)
+        self.assertEqual(segment["level"], "advanced")
+        self.assertEqual(segment["apply_policy"], "next_task")
+        self.assertEqual(segment["label_key"], "subtitleSegmentSeconds")
+        self.assertEqual(segment["visible_when"], [{"key": "ASR_MODE", "operator": "eq", "value": "local"}])
         self.assertEqual({field["key"] for field in schema["fields"]}, set(keys))
         tts_mode = next(field for field in schema["fields"] if field["key"] == "TTS_MODE")
         self.assertEqual(tts_mode["choices"], ["kokoro", "edge", "qwen"])
@@ -128,9 +139,57 @@ class SettingsSchemaTests(unittest.TestCase):
 
 
 class ConfigMigrationTests(unittest.TestCase):
+    def test_v1_asr_chunk_migrates_to_subtitle_duration_idempotently(self):
+        for duration in (1, 6, 8, 30):
+            with self.subTest(duration=duration):
+                raw = {"CONFIG_VERSION": 1, "ASR_CHUNK_LENGTH": duration, "FUTURE_EXTENSION": "keep"}
+                migrated = migrate_config(raw)
+                self.assertEqual(migrated["CONFIG_VERSION"], 2)
+                self.assertEqual(migrated["SUBTITLE_SEGMENT_SECONDS"], duration)
+                self.assertNotIn("ASR_CHUNK_LENGTH", migrated)
+                self.assertEqual(migrated["FUTURE_EXTENSION"], "keep")
+                self.assertEqual(migrate_config(migrated), migrated)
+                self.assertEqual(raw["ASR_CHUNK_LENGTH"], duration)
+
+    def test_explicit_new_subtitle_duration_wins_over_legacy_key(self):
+        for version in (0, 1, 2):
+            with self.subTest(version=version):
+                migrated = migrate_config({"CONFIG_VERSION": version, "ASR_CHUNK_LENGTH": 6, "SUBTITLE_SEGMENT_SECONDS": 12})
+                self.assertEqual(migrated["CONFIG_VERSION"], 2)
+                self.assertEqual(migrated["SUBTITLE_SEGMENT_SECONDS"], 12)
+                self.assertNotIn("ASR_CHUNK_LENGTH", migrated)
+
+    def test_legacy_asr_chunk_outliers_use_safe_supported_values(self):
+        for legacy, expected in ((None, 8), ("invalid", 8), ("", 8), (0, 8), (-1, 8), (31, 30), (600, 30)):
+            with self.subTest(legacy=legacy):
+                migrated = migrate_config({"CONFIG_VERSION": 1, "ASR_CHUNK_LENGTH": legacy})
+                self.assertEqual(migrated["SUBTITLE_SEGMENT_SECONDS"], expected)
+                self.assertNotIn("ASR_CHUNK_LENGTH", migrated)
+        self.assertEqual(migrate_config({"CONFIG_VERSION": 1})["SUBTITLE_SEGMENT_SECONDS"], 8)
+
+    def test_subtitle_duration_loads_publishes_validates_and_persists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text("CONFIG_VERSION: 1\nASR_CHUNK_LENGTH: 6\n", encoding="utf-8")
+            with patch.object(Settings, "CONFIG_PATH", path):
+                config = Settings()
+                self.assertEqual(config.SUBTITLE_SEGMENT_SECONDS, 6)
+                self.assertEqual(config.to_public_dict()["SUBTITLE_SEGMENT_SECONDS"], 6)
+                self.assertNotIn("ASR_CHUNK_LENGTH", config.to_public_dict())
+                self.assertNotIn("ASR_CHUNK_LENGTH", config._unknown_config)
+                config.update({"SUBTITLE_SEGMENT_SECONDS": "12"})
+                self.assertEqual(Settings().SUBTITLE_SEGMENT_SECONDS, 12)
+                for invalid in (0, 31):
+                    with self.assertRaises(ValueError):
+                        config.update({"SUBTITLE_SEGMENT_SECONDS": invalid})
+            saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["CONFIG_VERSION"], 2)
+            self.assertEqual(saved["SUBTITLE_SEGMENT_SECONDS"], 12)
+            self.assertNotIn("ASR_CHUNK_LENGTH", saved)
+
     def test_legacy_local_tts_is_migrated_idempotently(self):
         migrated = migrate_config({"TTS_MODE": "local", "FUTURE_EXTENSION": "keep"})
-        self.assertEqual(migrated["CONFIG_VERSION"], 1)
+        self.assertEqual(migrated["CONFIG_VERSION"], 2)
         self.assertEqual(migrated["TTS_MODE"], "kokoro")
         self.assertEqual(migrated["FUTURE_EXTENSION"], "keep")
         self.assertEqual(migrate_config(migrated), migrated)
@@ -180,7 +239,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 self.assertEqual(config.TTS_MODE, "kokoro")
                 config.update({"TTS_SPEED": 1.2})
             saved = yaml.safe_load(path.read_text(encoding="utf-8"))
-            self.assertEqual(saved["CONFIG_VERSION"], 1)
+            self.assertEqual(saved["CONFIG_VERSION"], 2)
             self.assertEqual(saved["FUTURE_EXTENSION"], "keep")
             self.assertEqual(saved["TTS_MODE"], "kokoro")
 

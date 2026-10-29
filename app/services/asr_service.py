@@ -57,7 +57,7 @@ class ASRService:
                         transcribe_args={
                             "beam_size": settings.ASR_BEAM_SIZE,
                             "task": "transcribe",
-                            "chunk_length": settings.ASR_CHUNK_LENGTH,
+                            "chunk_length": 30,
                         },
                     )
                 yield
@@ -302,7 +302,7 @@ class ASRService:
             beam_size=settings.ASR_BEAM_SIZE,
             language=language,
             task="transcribe",
-            chunk_length=settings.ASR_CHUNK_LENGTH,
+            chunk_length=30,
         )
 
         logger.info(

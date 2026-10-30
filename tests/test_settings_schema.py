@@ -160,7 +160,18 @@ class ConfigMigrationTests(unittest.TestCase):
                 self.assertNotIn("ASR_CHUNK_LENGTH", migrated)
 
     def test_legacy_asr_chunk_outliers_use_safe_supported_values(self):
-        for legacy, expected in ((None, 8), ("invalid", 8), ("", 8), (0, 8), (-1, 8), (31, 30), (600, 30)):
+        for legacy, expected in (
+            (None, 8),
+            ("invalid", 8),
+            ("", 8),
+            (4.5, 8),
+            (True, 8),
+            (False, 8),
+            (0, 8),
+            (-1, 8),
+            (31, 30),
+            (600, 30),
+        ):
             with self.subTest(legacy=legacy):
                 migrated = migrate_config({"CONFIG_VERSION": 1, "ASR_CHUNK_LENGTH": legacy})
                 self.assertEqual(migrated["SUBTITLE_SEGMENT_SECONDS"], expected)

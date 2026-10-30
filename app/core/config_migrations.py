@@ -24,10 +24,8 @@ def migrate_config(raw: Mapping[str, Any]) -> dict[str, Any]:
         version = 1
     if version == 1:
         if "SUBTITLE_SEGMENT_SECONDS" not in migrated:
-            try:
-                duration = int(migrated.get("ASR_CHUNK_LENGTH", 8))
-            except (TypeError, ValueError, OverflowError):
-                duration = 8
+            legacy_duration = migrated.get("ASR_CHUNK_LENGTH", 8)
+            duration = legacy_duration if type(legacy_duration) is int else 8
             migrated["SUBTITLE_SEGMENT_SECONDS"] = min(duration, 30) if duration > 0 else 8
         version = 2
     migrated.pop("ASR_CHUNK_LENGTH", None)

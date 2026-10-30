@@ -189,6 +189,7 @@ Copy-Item config.example.yaml config.yaml
 - `LLM_PROVIDER`：`lm_studio`、`ollama` 或 `openai_compatible`
 - `LM_STUDIO_MODEL`、`LM_STUDIO_CLI_PATH`、`LM_STUDIO_TTL_SECONDS`
 - `ASR_MODEL_SIZE`、`ASR_MODEL_PATH`、`ASR_API_URL`
+- `SUBTITLE_SEGMENT_SECONDS`：本地 ASR 生成字幕的目标显示分片时间（默认 `8` 秒，范围 `1`–`30` 秒）。它用于把 30 秒识别结果切成便于显示的字幕，不会缩短模型的识别上下文。
 - `DEVICE_PREFERENCE`：`auto`、`gpu` 或 `cpu`
 - `COMPUTE_TYPE`：`auto`、`float16` 或 `int8`
 - `TTS_MODE`：标准设置界面为 `kokoro`、`edge`、`qwen`；`speaches` 仅为旧兼容路线

@@ -1,15 +1,16 @@
 # H05 ASR 幽灵字幕交接检查点
 
-更新时间：2026-10-29（Asia/Shanghai）
+更新时间：2026-10-30（Asia/Shanghai）
 
 ## 当前状态
 
 - 工作树：`H:\Users\jacky\.codex\worktrees\tts-timeout\subtitle_translator`
 - 分支：`codex/h05-asr-context`
-- 设计提交：`1e854e8 docs: design ASR context and subtitle segmentation`
+- 当前 HEAD：`cfbab21889f34e6196ad707c2376485922f2a70a`
+- 设计提交：`1e854e8`；VLC 调研提交：`d6f7b2b`；实现计划：`b5ec26c`。
 - 本分支从 `a99fdb198f99cab45f9f1d5fb7d4b9a75eb5ed92` 创建，与 H06 隔离。
 - H06/TTS 超时分支为 `codex/tts-timeout-progress`，已推送至 `f096da4`。
-- 本轮仅完成设计、隔离实验和调研，没有修改应用实现。
+- Tasks 1–4 已实现、测试、提交并逐项独立审查通过；Task 5 文档、最终验证和真实样本重跑尚未开始。
 
 ## 编号与目标
 
@@ -31,7 +32,16 @@ H05 目标：让本地 faster-whisper 一次听更长上下文，再依据词级
 
 设计文档：`docs/superpowers/specs/2026-10-29-asr-context-and-subtitle-segmentation-design.md`
 
-注意：VLC 调研完成并补充设计后，还需用户再次确认，不能直接开始实现。
+设计已由用户确认。执行计划：`docs/superpowers/plans/2026-10-29-h05-asr-context-and-subtitle-segmentation.md`。
+
+## 实现进度
+
+- Task 1 `23b955d`：配置迁移到版本 2；`ASR_CHUNK_LENGTH` 替换为 `SUBTITLE_SEGMENT_SECONDS`；默认 8、范围 1–30；中英文设置文案完成。全量 990 passed，独立审查通过。
+- Task 2 `f142255`：新增共享 30 秒上下文常量和纯词时间戳分片函数；45 项聚焦测试、全量 1035 passed，独立审查通过。
+- Task 3 `385ecd7`：进程内本地 ASR 使用 30 秒、`word_timestamps=True` 并调用分片；远程 ASR 保持不变。全量 1038 passed，独立审查通过。
+- Task 4 `cfbab21`：worker 独立传入字幕分片时间、使用同一分片函数并序列化结果。全量 1039 passed，独立审查通过。
+- 每次全量 Python 测试仅有两条既有依赖弃用警告；Node 基线 32/32、Task 1 后 33/33，Vite 构建成功。
+- SDD 恢复账本（Git 忽略）：`.superpowers/sdd/2026-10-29-h05-asr-context-and-subtitle-segmentation/progress.md`。
 
 ## 已完成的隔离实验
 
@@ -65,13 +75,10 @@ H05 目标：让本地 faster-whisper 一次听更长上下文，再依据词级
 
 ## 下一步
 
-1. `T-H05-01`：读取 VLC 官方 STT MR 源码或 diff，核对音频缓冲、上下文窗口、Whisper 参数、字幕 cue 生成及 seek/epoch/discontinuity 处理。
-2. 将真正相关发现补充到设计文档并提交。
-3. 请用户复核最终设计。
-4. 确认后用 writing-plans 编写实现计划。
-5. 按 TDD 实现迁移、前后端设置和分片逻辑。
-6. 运行完整测试、构建和真实样本回归；全部通过后提交。
-7. 审查并推送本分支，不擅自合并主线。
+1. 从计划 Task 5 继续：更新 `README.md`、`README.zh-CN.md`、`CHANGELOG.md`，运行目标测试、Python 全量、Node 全量及 Vite 构建并提交。
+2. 重跑 8 分 30 秒真实样本；确认 decoded-audio SHA `994db05695f9395f2a45456ec88d298fc90a56c6c76d251af60118311277edab`，统计幽灵短语、重叠、连续重复和真实对白保留情况。
+3. 执行 SDD 全分支最终审查；发现问题按最终审查流程修复和复核。
+4. 更新本交接记录、推送分支；不要自动合并主线。
 
 ## 强制规则
 
@@ -82,4 +89,4 @@ H05 目标：让本地 faster-whisper 一次听更长上下文，再依据词级
 
 ## 新对话接手提示词
 
-请使用 `$project-handoff` 接手 Video Translator 的 H05 幽灵字幕工作流。先读取 `H:\Users\jacky\.codex\worktrees\tts-timeout\subtitle_translator\handoff\h05-asr-context\CURRENT.md`，核对分支 `codex/h05-asr-context`、HEAD 和工作树状态，然后从 `T-H05-01` 的 VLC 官方 STT MR 源码调研继续。复用已有隔离样本与依赖对照，不要重做已排除的 CTranslate2 升级和全局 hallucination threshold 路径；完成调研后更新设计、提交并请用户复核。
+请使用 `$project-handoff` 接手 Video Translator 的 H05 幽灵字幕工作流。先读取 `H:\Users\jacky\.codex\worktrees\tts-timeout\subtitle_translator\handoff\h05-asr-context\CURRENT.md` 和 SDD 账本，核对分支 `codex/h05-asr-context`、HEAD `cfbab21` 与工作树状态，然后从实现计划 Task 5 继续。Tasks 1–4 已完成并逐项审查通过，不要重做；完成文档、全量验证和真实样本回归后执行全分支最终审查，不要自动合并主线。

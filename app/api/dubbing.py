@@ -8,10 +8,13 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.events import emit_event, task_event_snapshot
 from app.core.file_security import AUDIO_EXTENSIONS, MAX_CLONE_BYTES, save_upload, validate_file_component
 from app.core.history import history_manager
 from app.services.dubbing_service import dubbing_service
 from app.services.dubbing_service import _is_kokoro_mode
+from app.services.pipeline_service import pipeline_service
+from app.services.translation_review_service import TranslationReviewService, translation_busy
 from app.services.tts.registry import is_korean_language, resolve_tts_route
 from app.services.tts.voice_selection import resolve_available_voice
 
@@ -47,9 +50,21 @@ def _run_dubbing_task(
 ):
     try:
         dubbing_service.dub(task_id, target_lang, voice, speed, clone_sample_path)
-    except Exception:
+        saved = history_manager.update_task(task_id, {
+            "status": "completed", "dubbing_status": "completed",
+            "progress_percent": 100, "message": "配音完成", "failed_stage": None,
+        })
+        if saved:
+            emit_event(task_id, task_event_snapshot(saved))
+    except Exception as exc:
         logger.exception(f"Background dubbing task failed for {task_id}")
-        # Error state already updated inside dub()
+        # Validation can fail before dub() publishes its own error state.
+        saved = history_manager.update_task(task_id, {
+            "status": "failed", "dubbing_status": "failed", "dubbing_error": str(exc),
+            "message": str(exc), "failed_stage": "dubbing",
+        })
+        if saved:
+            emit_event(task_id, task_event_snapshot(saved))
 
 
 @router.post("/dubbing")
@@ -58,6 +73,11 @@ async def start_dubbing(request: DubbingRequest, background_tasks: BackgroundTas
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if pipeline_service.is_busy(request.task_id) or translation_busy(request.task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
+    if request.target_lang != "source" and task.get("translation_reviews"):
+        if not TranslationReviewService(history_manager).is_approved(request.task_id, request.target_lang or task.get("target_lang")):
+            raise HTTPException(status_code=409, detail="Review the current subtitles before dubbing")
     video_path = task.get("upload_path") or task.get("source_path")
     if not video_path:
         raise HTTPException(status_code=400, detail="Source video path not found")
@@ -112,6 +132,23 @@ async def start_dubbing(request: DubbingRequest, background_tasks: BackgroundTas
             logger.warning("Voice selection failed for %s: %s", route.provider_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # Voice discovery above may yield to a simultaneous pipeline start.
+    if pipeline_service.is_busy(request.task_id) or translation_busy(request.task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
+    task = history_manager.get_task(request.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("burn_status") == "processing" or task.get("dubbing_status") == "processing":
+        raise HTTPException(status_code=409, detail="Task is still processing or stopping")
+    if request.target_lang != "source" and task.get("translation_reviews"):
+        if not TranslationReviewService(history_manager).is_approved(request.task_id, request.target_lang or task.get("target_lang")):
+            raise HTTPException(status_code=409, detail="Review the current subtitles before dubbing")
+    # Reserve before handing work to a thread: edits/translation/approval must
+    # not slip into the response-to-worker-start gap.
+    history_manager.update_task(request.task_id, {"status": "dubbing", "dubbing_status": "processing",
+                                                "dubbing_error": None, "progress_percent": 0,
+                                                "pipeline_status": None, "pipeline_stage": None,
+                                                "last_process_route": "dubbing"})
     background_tasks.add_task(
         _run_dubbing_task,
         request.task_id,

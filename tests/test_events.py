@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from unittest.mock import patch
 
 from app.core import events
 
@@ -48,24 +49,45 @@ class EventQueueTests(unittest.IsolatedAsyncioTestCase):
         await second.aclose()
         self.assertNotIn("shared-task", events._task_queues)
 
+    async def test_full_subscriber_queues_replace_stale_progress_with_terminal(self):
+        with patch.object(events.settings, "SSE_QUEUE_MAXSIZE", 1):
+            first = events.event_generator("saturated", initial_data={"status": "translating"})
+            second = events.event_generator("saturated", initial_data={"status": "translating"})
+            await anext(first)
+            await anext(second)
+
+            events.emit_event("saturated", {"status": "translating", "state_revision": 2})
+            events.emit_event("saturated", {"status": "completed", "state_revision": 3})
+
+            payloads = await asyncio.gather(anext(first), anext(second))
+            self.assertTrue(all('"status": "completed"' in payload for payload in payloads))
+            with self.assertRaises(StopAsyncIteration):
+                await anext(first)
+            self.assertIn("saturated", events._task_queues)
+            with self.assertRaises(StopAsyncIteration):
+                await anext(second)
+            self.assertNotIn("saturated", events._task_queues)
+
     async def test_artifact_paths_are_browser_urls_in_live_and_initial_events(self):
-        path = str(events.settings.OUTPUT_DIR / "nested" / "subtitle.json")
-        data = {"status": "completed", "transcription_path": path,
-                "translations": {"Chinese": path},
-                "subtitle_outputs": {"srt": "/static/output/already.srt"},
-                "dubbing_video_path": None}
-        generator = events.event_generator("paths", initial_data=data)
+        dubbing_audio = str(events.settings.OUTPUT_DIR / "dub" / "audio.wav")
+        dubbing_video = str(events.settings.OUTPUT_DIR / "dub" / "video.mp4")
+        data = {"status": "dubbing_completed",
+                "dubbing_status": "completed", "dubbing_target_lang": "Chinese",
+                "dubbing_audio_path": dubbing_audio,
+                "dubbing_raw_video_path": dubbing_video,
+                "dubbing_video_path": dubbing_video}
+        snapshot = events.task_event_snapshot(data)
+        generator = events.event_generator("paths", initial_data=snapshot)
         initial = await anext(generator)
-        events.emit_event("paths", data)
+        events.emit_event("paths", snapshot)
         live = await anext(generator)
         for payload in (initial, live):
             actual = json.loads(payload.removeprefix("data: "))
-            self.assertEqual(actual["transcription_path"], "/static/output/nested/subtitle.json")
-            self.assertEqual(actual["translations"]["Chinese"], actual["transcription_path"])
-            self.assertEqual(actual["subtitle_outputs"]["srt"], "/static/output/already.srt")
-            self.assertIsNone(actual["dubbing_video_path"])
-        self.assertEqual(data["transcription_path"], path)
-        self.assertEqual(data["translations"]["Chinese"], path)
+            self.assertEqual(actual["dubbing_target_lang"], "Chinese")
+            self.assertEqual(actual["dubbing_audio_path"], "/static/output/dub/audio.wav")
+            self.assertEqual(actual["dubbing_raw_video_path"], "/static/output/dub/video.mp4")
+            self.assertEqual(actual["dubbing_video_path"], "/static/output/dub/video.mp4")
+        self.assertEqual(data["dubbing_audio_path"], dubbing_audio)
         await generator.aclose()
 
 

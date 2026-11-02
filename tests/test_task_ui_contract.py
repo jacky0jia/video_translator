@@ -69,6 +69,7 @@ assert.equal(localizedTaskMessage({status:'transcribing', message:'worker diagno
 assert.equal(stageIdForEvent({status: 'switching_model', gpu_stage: 'tts'}, 'translate'), 'dub');
 assert.equal(stageIdForEvent({status: 'waiting_for_gpu', gpu_stage: 'asr'}, ''), 'transcribe');
 assert.equal(stageIdForEvent({status: 'switching_model'}, 'translate'), 'translate');
+assert.equal(stageIdForEvent({status: 'dubbing_completed'}, 'dub'), '');
 
 assert.deepEqual(completedStageIds({transcription_path: '/source.json'}, 'Chinese'), ['transcribe']);
 assert.deepEqual(completedStageIds({
@@ -106,6 +107,22 @@ const completed = deriveTaskProcessingState({status: 'completed'}, t);
 assert.deepEqual(completed, {
   running: false, status: 'completed', progress: 100,
   currentStage: '', message: 'allOutputsReady',
+});
+
+const legacyStandaloneDubbingCompleted = deriveTaskProcessingState({
+  status: 'dubbing', dubbing_status: 'completed', progress_percent: 100,
+}, t);
+assert.deepEqual(legacyStandaloneDubbingCompleted, {
+  running: false, status: 'completed', progress: 100,
+  currentStage: '', message: 'allOutputsReady',
+});
+
+const legacyStandaloneDubbingFailed = deriveTaskProcessingState({
+  status: 'dubbing', dubbing_status: 'failed', dubbing_error: 'provider offline', progress_percent: 62,
+}, t);
+assert.deepEqual(legacyStandaloneDubbingFailed, {
+  running: false, status: 'failed', progress: 62,
+  currentStage: 'dub', message: 'provider offline',
 });
 
 assert.deepEqual(
@@ -210,7 +227,7 @@ assert.deepEqual(subtitleVisibility('bilingual', true, true, false), {
         self.assertNotIn("'hidden md:flex'", app)
         for page in ("tasks", "preview", "process", "export"):
             self.assertIn(f'data-page="{page}"', app)
-        self.assertIn("if (ttsMode === 'qwen') setSpeed(1)", processing)
+        self.assertIn("if (ttsMode === 'qwen') setOption('speed', 1, false)", processing)
         self.assertIn("onlineLanguages.includes('ko') ? 'ko-KR-SunHiNeural' : ''", processing)
         self.assertIn("onlineLanguages.includes(languageCode(targetLang))", panel)
         self.assertIn("route === 'dubbing' && !voice", panel)

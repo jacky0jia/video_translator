@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { findSubtitleOverlaps, parseSubtitleTime } from '../app/frontend/src/utils/subtitleTiming.js';
 import { subtitlePreviewLayout } from '../app/frontend/src/utils/subtitlePreviewLayout.js';
+import { subtitleReviewRows } from '../app/frontend/src/utils/subtitleReview.js';
+
+test('review links only include distinct existing translated rows', () => {
+  assert.deepEqual(subtitleReviewRows([6, 15, 54, 55, 69, 120, 205, 216, 217], 62), [6, 15, 54, 55]);
+  assert.deepEqual(subtitleReviewRows([2, 1, 2, 0, -1, 1.5, '3', null, true], 3), [1, 2]);
+  assert.deepEqual(subtitleReviewRows([1], 0), []);
+  assert.deepEqual(subtitleReviewRows(null, 62), []);
+});
 
 test('overlap detection ignores touching boundaries and flags both rows', () => {
   assert.deepEqual(findSubtitleOverlaps([

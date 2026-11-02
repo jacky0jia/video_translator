@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -7,12 +6,17 @@ from fastapi import APIRouter, Form, HTTPException
 from fastapi.responses import FileResponse
 
 from app.core.config import settings
+from app.core.output_paths import to_output_url, output_reference_path
 from app.core.history import history_manager
-from app.core.events import emit_event
+from app.core.task_run import current_task_run
+from app.services.pipeline_service import pipeline_service
+from app.core.events import emit_event, task_event_snapshot
+from app.services.translation_review_service import TranslationReviewService, exclusive_translation, translation_busy
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.core.file_security import validate_file_component
 from app.services.formatter_service import subtitle_formatter
 from app.services.translation_service import translation_service
+from app.services.subtitle_timing_versions import SubtitleTimingVersions
 
 router = APIRouter()
 
@@ -42,8 +46,9 @@ def _resolve_fs_path(path_str: Optional[str]) -> Optional[Path]:
     if not path_str:
         return None
     if path_str.startswith("/static/output/"):
-        rel = path_str[len("/static/output/"):].replace("/", os.sep)
-        target = settings.OUTPUT_DIR / rel
+        target = output_reference_path(path_str)
+        if target is None:
+            return None
     else:
         target = settings.OUTPUT_DIR / path_str
 
@@ -58,6 +63,7 @@ def _resolve_fs_path(path_str: Optional[str]) -> Optional[Path]:
 
 
 @router.post("/translate")
+@exclusive_translation
 async def translate_transcription(
     json_path: str = Form(...), target_lang: str = Form("Chinese"), task_id: Optional[str] = Form(None),
     pipeline: bool = False,
@@ -66,12 +72,17 @@ async def translate_transcription(
     Translates an existing transcription JSON file using LLM with sliding window.
     If task_id is provided, resolves the real file path from history manager.
     """
+    if task_id and not current_task_run(task_id) and pipeline_service.is_busy(task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     validate_file_component(target_lang, 'target language')
     if task_id:
         validate_file_component(task_id, 'task ID')
     resolved_path = json_path
     if task_id:
         task = history_manager.get_task(task_id)
+        if (task and not current_task_run(task_id)
+                and (task.get("dubbing_status") == "processing" or task.get("burn_status") == "processing")):
+            raise HTTPException(status_code=409, detail="Task is still processing or stopping")
         if task and task.get("transcription_path"):
             resolved_path = task["transcription_path"]
 
@@ -136,10 +147,13 @@ async def translate_transcription(
             )
 
         # 3. Check for translation failures
+        if len(translated_result.segments) != len(result.segments):
+            raise RuntimeError("Translation row count does not match source")
         failure_markers = {"Translation error", "[Translation failed]"}
         failed_segments = [
             index for index, seg in enumerate(translated_result.segments)
-            if not seg.text.strip() or seg.text.strip() in failure_markers
+            if (not seg.text.strip() and result.segments[index].text.strip())
+            or seg.text.strip() in failure_markers
         ]
         if failed_segments:
             err_msg = (
@@ -158,8 +172,12 @@ async def translate_transcription(
         output_filename = f"{path.stem}_translated_{target_lang}_{task_id or 'standalone'}"
         output_path = settings.OUTPUT_DIR / f"{output_filename}.json"
         settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(translated_result.model_dump_json(indent=4))
+        encoded_translation = translated_result.model_dump_json(indent=4).encode('utf-8')
+        timing_updates = {}
+        if task_id:
+            timing_updates = SubtitleTimingVersions(history_manager, settings.OUTPUT_DIR).include_generated_translation(
+                history_manager.get_task(task_id) or {}, target_lang, output_path, encoded_translation)
+        output_path.write_bytes(encoded_translation)
 
         # 5. Update history if task_id is provided
         if task_id:
@@ -187,16 +205,26 @@ async def translate_transcription(
                     "translation_profiles": translation_profiles,
                     "pipeline_translation_targets": pipeline_translation_targets,
                     "translation_alignment_review": alignment_review,
+                    "dubbing_review": {**task["dubbing_review"], "needs_recheck": True} if task.get("dubbing_review") else None,
+                    **timing_updates,
                 },
             )
             emit_event(task_id, {"status": final_status, "message": "completed", "target_lang": target_lang,
                                  "alignment_review_rows": translated_result.alignment_review_rows,
                                  "alignment_check_incomplete": translated_result.alignment_check_incomplete})
+            reviews = TranslationReviewService(history_manager)
+            reviews.request(task_id, target_lang)
+            if not pipeline or not current_task_run(task_id):
+                reviews.pause(task_id, target_lang)
+                emit_event(task_id, task_event_snapshot(history_manager.get_task(task_id)))
 
         return {
             "status": "success",
             "translated_file": str(output_path),
             "target_language": target_lang,
+            "review_required": bool(task_id),
+            "state_revision": (history_manager.get_task(task_id) or {}).get("state_revision") if task_id else None,
+            "review": ((history_manager.get_task(task_id) or {}).get("translation_reviews") or {}).get(target_lang) if task_id else None,
         }
 
     except Exception as e:
@@ -230,9 +258,20 @@ async def export_subtitles(
     extra_json_paths: comma-separated list of additional translation JSON paths for multilingual export
     Returns the file as a downloadable response.
     """
+    if task_id and not current_task_run(task_id) and pipeline_service.is_busy(task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
     task = None
     if task_id:
         task = history_manager.get_task(task_id)
+
+    if task_id and translation_busy(task_id):
+        raise HTTPException(status_code=409, detail="Translation is still processing")
+    if (task and not current_task_run(task_id)
+            and (task.get("dubbing_status") == "processing" or task.get("burn_status") == "processing")):
+        raise HTTPException(status_code=409, detail="Task is still processing or stopping")
+    if task and mode != "original" and task.get("translation_reviews"):
+        if not TranslationReviewService(history_manager).is_approved(task_id, task.get("target_lang")):
+            raise HTTPException(status_code=409, detail="Review the current subtitles before exporting")
 
     # Resolve paths based on mode
     resolved_path = json_path
@@ -307,7 +346,7 @@ async def export_subtitles(
         filename = path.stem.replace("_translated", "").replace(f"_{target_lang}", "") + suffix
         out_path = subtitle_formatter.save_to_file(content, filename, ext)
 
-        output_url = f"/static/output/{out_path.relative_to(settings.OUTPUT_DIR).as_posix()}"
+        output_url = to_output_url(out_path)
         if task_id and task:
             subtitle_outputs = dict(task.get("subtitle_outputs") or {})
             subtitle_outputs[ext] = str(out_path)
@@ -318,6 +357,8 @@ async def export_subtitles(
                     "last_subtitle_format": ext,
                     "last_process_route": "dubbing" if process_route == "dubbing" else "subtitles",
                     "last_burn_enabled": bool(burn_enabled) if process_route != "dubbing" else False,
+                    **({"status": "completed", "pipeline_status": None, "progress_percent": 100}
+                       if process_route == "subtitles" and not burn_enabled else {}),
                 },
             )
 

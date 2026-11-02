@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MASKED_SECRET = "********"
 
 
@@ -94,7 +94,7 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
     SettingDefinition(key="ASR_MODEL_PATH", value_type="path", default="", section=SettingSection.TRANSCRIPTION, order=10, label_key="asrModelPath", placeholder_key="asrModelPathPlaceholder", local_only=True, empty_as_none=True, span=2),
     SettingDefinition(key="ASR_API_URL", value_type="string", default="", section=SettingSection.TRANSCRIPTION, order=20, label_key="asrApiUrl", placeholder_key="asrApiUrlPlaceholder", format="url", empty_as_none=True, span=2),
     SettingDefinition(key="ASR_REMOTE_MODEL", value_type="string", default="", section=SettingSection.TRANSCRIPTION, order=30, label_key="asrRemoteModel", placeholder_key="asrRemoteModelPlaceholder", empty_as_none=True, span=2),
-    SettingDefinition(key="ASR_CHUNK_LENGTH", value_type="integer", default=6, section=SettingSection.TRANSCRIPTION, level=SettingLevel.ADVANCED, order=40, label_key="asrChunkLength", minimum=1),
+    SettingDefinition(key="SUBTITLE_SEGMENT_SECONDS", value_type="integer", default=8, section=SettingSection.TRANSCRIPTION, level=SettingLevel.ADVANCED, order=40, label_key="subtitleSegmentSeconds", minimum=1, maximum=30, visible_when=_when("ASR_MODE", "local")),
     SettingDefinition(key="DEVICE_PREFERENCE", value_type="enum", default="auto", section=SettingSection.TRANSCRIPTION, order=50, label_key="devicePreference", choices=("auto", "gpu", "cpu")),
     SettingDefinition(key="COMPUTE_TYPE", value_type="enum", default="auto", section=SettingSection.TRANSCRIPTION, level=SettingLevel.ADVANCED, order=60, label_key="computeType", choices=("auto", "float16", "int8")),
 

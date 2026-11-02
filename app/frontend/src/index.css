@@ -78,6 +78,7 @@ body { margin: 0; min-width: 320px; background: #f4f7fb; }
 .app-status { display: inline-flex; align-items: center; gap: 5px; }
 .app-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
 .app-status-processing::before { background: #5b6fee; box-shadow: 0 0 0 4px rgba(91, 111, 238, .12); }
+.app-status-cancelling::before { background: #d97706; }
 .app-status-completed::before { background: #10b981; }
 .app-status-failed::before { background: #ef4444; }
 .app-mobile-nav { display: none; }

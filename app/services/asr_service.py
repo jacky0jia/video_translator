@@ -14,6 +14,8 @@ from app.core.config import settings
 from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle, provider_stage
 from app.core.schemas import TranscriptionResult, TranscriptionSegment
 from app.services.hardware_service import hardware_service
+from app.services.asr_quality import transcribe_checked
+from app.services.asr_segments import LOCAL_ASR_CONTEXT_SECONDS, split_faster_whisper_segments
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +58,10 @@ class ASRService:
                         transcribe_args={
                             "beam_size": settings.ASR_BEAM_SIZE,
                             "task": "transcribe",
-                            "chunk_length": settings.ASR_CHUNK_LENGTH,
+                            "chunk_length": LOCAL_ASR_CONTEXT_SECONDS,
+                            "word_timestamps": True,
                         },
+                        subtitle_segment_seconds=settings.SUBTITLE_SEGMENT_SECONDS,
                     )
                 yield
             finally:
@@ -296,28 +300,22 @@ class ASRService:
         model = self._get_model()
 
         # transcribe returns a generator of segments
-        segments, info = model.transcribe(
-            str(audio_path),
+        segments, info = transcribe_checked(
+            model, str(audio_path),
             beam_size=settings.ASR_BEAM_SIZE,
             language=language,
             task="transcribe",
-            chunk_length=settings.ASR_CHUNK_LENGTH,
+            chunk_length=LOCAL_ASR_CONTEXT_SECONDS,
+            word_timestamps=True,
         )
 
         logger.info(
             f"Detected language: {info.language} with probability {info.language_probability:.2f}"
         )
 
-        transcription_segments = []
-        for segment in segments:
-            transcription_segments.append(
-                TranscriptionSegment(
-                    start=segment.start,
-                    end=segment.end,
-                    text=segment.text.strip(),
-                    confidence=segment.avg_logprob,
-                )
-            )
+        transcription_segments = split_faster_whisper_segments(
+            segments, settings.SUBTITLE_SEGMENT_SECONDS
+        )
 
         return TranscriptionResult(
             video_source=str(audio_path),

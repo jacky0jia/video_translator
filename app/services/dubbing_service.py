@@ -20,10 +20,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from app.core.config import settings
+from app.core.output_paths import to_output_url
 from app.core.gpu_lifecycle import gpu_provider_lifecycle
 from app.core.provider_lifecycle import NoopProviderLifecycle, ProviderLifecycle
 from app.core.history import history_manager
 from app.core.events import emit_event
+from app.services.dubbing_review import dubbing_review_record
 from app.services.hardware_service import hardware_service
 from app.services.media_duration import probe_media_duration
 from app.core.schemas import TranscriptionResult
@@ -84,9 +86,10 @@ class DubbingCancelled(RuntimeError):
 class DubbingCompressionRequired(ValueError):
     """Measured speech cannot fit and stay synchronized without shorter text."""
 
-    def __init__(self, message: str, segment_indices: List[int]):
+    def __init__(self, message: str, segment_indices: List[int], *, issues=None):
         super().__init__(message)
         self.segment_indices = segment_indices
+        self.issues = list(issues or ())
 
 
 def _is_kokoro_mode() -> bool:
@@ -204,11 +207,7 @@ class DubbingService:
             return None
 
     def _to_download_url(self, file_path: Path) -> str:
-        try:
-            rel = file_path.relative_to(settings.OUTPUT_DIR)
-            return f"/static/output/{rel.as_posix()}"
-        except ValueError:
-            return str(file_path)
+        return to_output_url(file_path)
 
     def _parse_time(self, time_str: str) -> float:
         parts = time_str.split(":")
@@ -284,30 +283,6 @@ class DubbingService:
         )
         return result.audio
 
-    async def _fetch_voice_fallbacks(self, primary_voice: str, adapter) -> List[str]:
-        """Fetch voices sharing the same language as ``primary_voice`` (excluding it).
-
-        Used to gracefully fall back when a specific voice crashes the TTS
-        server mid-synthesis (e.g. some Kokoro voices trigger Speaches bugs).
-        Returns an empty list on any failure (fallback simply disabled).
-        """
-        try:
-            voices = await adapter.list_voices()
-            primary = next(
-                (voice for voice in voices if voice.id == primary_voice or voice.name == primary_voice),
-                None,
-            )
-            primary_lang = primary.language if primary else ""
-            if not primary_lang:
-                return []
-            return [
-                voice.id
-                for voice in voices
-                if voice.id and voice.id != primary_voice and voice.language == primary_lang
-            ]
-        except Exception as e:
-            logger.warning(f"Failed to fetch voice fallbacks: {e}")
-            return []
 
     async def _synthesize_all(
         self,
@@ -321,9 +296,7 @@ class DubbingService:
     ) -> List[Path]:
         """Reuse unchanged raw speech and synthesize changed utterances sequentially.
 
-        If a voice fails after retries (e.g. server crash on a specific voice),
-        automatically falls back to other voices of the same language. Once a
-        fallback voice succeeds it is used for all remaining segments.
+        Preserve the selected voice throughout; synthesis failure stops the task.
         """
         raw_paths: List[Path] = []
         total = len(segments)
@@ -341,12 +314,10 @@ class DubbingService:
         adapter = self.tts_registry.create(provider)
         if provider == "speaches" and client is not None:
             adapter.bind_client(client)
-        effective_voice = voice
         stage_lifecycle = self._gpu_lifecycle if provider == "qwen" else self._lifecycle
         started = False
         reused = 0
         synthesized = 0
-        fallback_voices = []
         try:
             for i, seg in enumerate(segments):
                 self._check_cancelled(task_id)
@@ -358,65 +329,36 @@ class DubbingService:
                     raw_paths.append(placeholder)
                     continue
 
-                wav_bytes = cache.get(text, effective_voice)
-                if wav_bytes is None and not started:
-                    started = True
-                    await stage_lifecycle.startup(task_id=task_id, stage="tts", provider=provider)
-                    if provider != "edge":
-                        fallback_voices = await self._fetch_voice_fallbacks(voice, adapter)
-                # Cache entries are keyed by the actual voice, including fallbacks.
-                voices_to_try = [effective_voice] + [
-                    v for v in fallback_voices if v != effective_voice
-                ]
-                last_err: Optional[Exception] = None
+                wav_bytes = cache.get(text, voice)
                 was_cached = wav_bytes is not None
-                for try_voice in ([] if was_cached else voices_to_try):
+                if wav_bytes is None:
+                    if not started:
+                        started = True
+                        await stage_lifecycle.startup(task_id=task_id, stage="tts", provider=provider)
                     try:
-                        wav_bytes = cache.get(text, try_voice)
-                        was_cached = wav_bytes is not None
-                        if wav_bytes is None:
-                            wav_bytes = await self._synthesize_one(
-                                client,
-                                text,
-                                try_voice,
-                                speed,
-                                provider,
-                                adapter=adapter,
-                                should_cancel=lambda: bool(
-                                    self._cancel_events.get(task_id)
-                                    and self._cancel_events[task_id].is_set()
-                                ),
-                                language=language,
-                            )
-                            self._check_cancelled(task_id)
-                            # A first local run may download model assets. Store
-                            # against their final identity, not the missing files.
-                            if synthesized == 0:
-                                cache = SpeechCache(settings.TEMP_DIR / task_id / "speech-cache",
-                                                    synthesis_context(provider), speed=speed, language=language)
-                            cache.put(text, try_voice, wav_bytes)
-                        if try_voice != effective_voice:
-                            logger.warning(
-                                f"Segment {i + 1}/{total}: switched to fallback voice "
-                                f"'{try_voice}' (primary '{voice}' failed)"
-                            )
-                            effective_voice = try_voice  # switch permanently
-                        break
+                        wav_bytes = await self._synthesize_one(
+                            client, text, voice, speed, provider, adapter=adapter,
+                            should_cancel=lambda: bool(
+                                self._cancel_events.get(task_id)
+                                and self._cancel_events[task_id].is_set()
+                            ),
+                            language=language,
+                        )
                     except TTSCancelled as exc:
                         raise DubbingCancelled(str(exc)) from exc
                     except DubbingCancelled:
                         raise
-                    except RuntimeError as e:
-                        last_err = e
-                        logger.warning(
-                            f"Segment {i + 1}/{total}: voice '{try_voice}' failed: {e}"
-                        )
-                        continue
-
-                if wav_bytes is None:
-                    raise last_err or RuntimeError(
-                        f"All voices failed for segment {i + 1}/{total}"
-                    )
+                    except (RuntimeError, TimeoutError) as exc:
+                        raise RuntimeError(
+                            f"Segment {i + 1}/{total}: selected voice '{voice}' failed: {exc}. "
+                            "Dubbing stopped without changing voice. Retry or choose another voice."
+                        ) from exc
+                    self._check_cancelled(task_id)
+                    # Store against final model identity after any first-run download.
+                    if synthesized == 0:
+                        cache = SpeechCache(settings.TEMP_DIR / task_id / "speech-cache",
+                                            synthesis_context(provider), speed=speed, language=language)
+                    cache.put(text, voice, wav_bytes)
 
                 raw_path = temp_dir / f"raw_{i:06d}.wav"
                 with open(raw_path, "wb") as f:
@@ -589,8 +531,8 @@ class DubbingService:
             if text:
                 groups.append(
                     SimpleNamespace(
-                        start=float(current[0].start),
-                        end=float(current[-1].end),
+                        start=min(float(member.start) for member in current),
+                        end=max(float(member.end) for member in current),
                         text=text,
                         segment_indices=tuple(current_indices),
                     )
@@ -602,8 +544,14 @@ class DubbingService:
             if not (segment.text or "").strip():
                 continue
             if current:
-                prospective_duration = float(segment.end) - float(current[0].start)
-                gap = float(segment.start) - float(current[-1].end)
+                # Nested/overlapping rows need the whole group's time envelope.
+                group_start = min(float(member.start) for member in current)
+                group_end = max(float(member.end) for member in current)
+                prospective_duration = (
+                    max(group_end, float(segment.end))
+                    - min(group_start, float(segment.start))
+                )
+                gap = float(segment.start) - group_end
                 if gap > 0.75 or prospective_duration > NATURAL_MAX_GROUP_SECONDS:
                     flush()
             current.append(segment)
@@ -732,6 +680,30 @@ class DubbingService:
             excesses = [(durations[index] / tempo, index) for index in range(len(segments))]
         chosen = [index for _, index in sorted(excesses, reverse=True)[:8]]
         return sorted({row for index in chosen for row in getattr(segments[index], "segment_indices", ())})
+
+    @classmethod
+    def _dubbing_sync_issues(cls, segments, durations, tempo, sentence_gap, total_duration, lead_seconds):
+        positions, _, _ = cls._natural_timeline_plan(segments, durations, tempo, sentence_gap, lead_seconds)
+        issues = []
+        for index, (segment, (start, end)) in enumerate(zip(segments, positions)):
+            deadline = float(segment.end) + NATURAL_MAX_SYNC_LAG_SECONDS
+            if index + 1 < len(segments):
+                deadline = min(deadline, float(segments[index + 1].start)
+                               + NATURAL_MAX_SYNC_LAG_SECONDS - sentence_gap)
+            else:
+                deadline = min(deadline, total_duration)
+            excess = max(0.0, end - deadline,
+                         start - float(segment.start) - NATURAL_MAX_SYNC_LAG_SECONDS)
+            if excess <= 0.000001:
+                continue
+            issues.append({
+                "segment_indices": list(getattr(segment, "segment_indices", ())),
+                "raw_seconds": round(durations[index], 3),
+                "fit_seconds": round(durations[index] / tempo, 3),
+                "available_seconds": round(max(0.0, deadline - start), 3),
+                "excess_seconds": round(excess, 3), "tempo": round(tempo, 3),
+            })
+        return issues
 
     @staticmethod
     def _percentile(values: List[float], percentile: float) -> float:
@@ -862,6 +834,10 @@ class DubbingService:
                 f"视频末尾超出 {overflow:.1f} 秒；语音原长 {timing['raw_speech_seconds']:.1f} 秒，"
                 f"共 {len(segments)} 段。需要精简部分译文；确认前不会修改字幕。",
                 target_indices,
+                issues=self._dubbing_sync_issues(
+                    segments, durations, max_uniform_tempo, NATURAL_MIN_SENTENCE_GAP_SECONDS,
+                    total_duration, NATURAL_MAX_UTTERANCE_LEAD_SECONDS,
+                ),
             )
         positions, applied_start_lag, applied_end_lag = self._natural_timeline_plan(
             segments, durations, timeline_tempo, sentence_gap, lead_seconds
@@ -871,7 +847,7 @@ class DubbingService:
                        "max_start_lag_seconds": round(applied_start_lag, 3),
                        "max_end_lag_seconds": round(applied_end_lag, 3)})
         if task_id:
-            history_manager.update_task(task_id, {"dubbing_timing": timing})
+            history_manager.update_task(task_id, {"dubbing_timing": timing, "dubbing_review": None})
         logger.info(
             "Dubbing natural timeline uses one uniform tempo %.3fx, %.3fs sentence gaps, "
             "and up to %.3fs distributed lead (groups=%s, natural_end=%.3fs, video=%.3fs)",
@@ -1180,7 +1156,7 @@ class DubbingService:
             history_manager.update_task(
                 task_id,
                 {"dubbing_status": "awaiting_compression" if awaiting_pipeline_approval else "failed",
-                 "dubbing_error": str(exc)},
+                 "dubbing_error": str(exc), "dubbing_review": dubbing_review_record(exc, lang_label)},
             )
             emit_event(task_id, {"status": "dubbing_compression_required", "message": str(exc)})
             raise

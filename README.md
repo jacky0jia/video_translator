@@ -39,6 +39,8 @@ See the [English portable setup guide](packaging/UPSTREAM-INSTALL.md). English i
 
 ## Features
 
+The source checkout adds a collapsible **Output video** section under Dubbing, showing actual source parameters and an estimated output plan. **Auto balanced** follows non-AV1 source codecs and bitrate; when AV1 hardware encoding is unavailable, it uses bitrate-controlled HEVC/H.264 up to 1440p, without upscaling or changing frame timing. Choose **Keep source resolution**, **Keep source codec**, or **Custom** to override this strategy. Keeping AV1 may require much slower CPU encoding. Hardware usability is checked; unavailable custom codecs are reported rather than silently replaced. Without burned subtitles or the end note, dubbing copies the original video stream regardless of output strategy. Re-encoding is not lossless and size estimates are not guarantees. These changes are not yet included in the alpha.5 portable download.
+
 - Local transcription with faster-whisper and automatic long-video chunking
 - Local LLM translation through LM Studio, with optional Ollama and OpenAI-compatible endpoints
 - SRT, VTT, and ASS export with translated, bilingual, or original subtitles
@@ -148,6 +150,15 @@ Activate the Conda environment, then run:
 .\start.bat
 ```
 
+The launcher uses the active environment's `python` for both dependency checks and Uvicorn. If you do not want to activate the environment first, point it at the correct interpreter explicitly:
+
+```powershell
+$env:APP_PYTHON = "C:\path\to\your\env\python.exe"
+.\start.bat
+```
+
+If the launcher reports missing packages, install `requirements.txt` into that same Python environment before retrying.
+
 Open <http://127.0.0.1:8769/> in a browser.
 
 To use another port:
@@ -185,6 +196,7 @@ Common fields:
 - `LLM_PROVIDER`: `lm_studio`, `ollama`, or `openai_compatible`
 - `LM_STUDIO_MODEL`, `LM_STUDIO_CLI_PATH`, `LM_STUDIO_TTL_SECONDS`
 - `ASR_MODEL_SIZE`, `ASR_MODEL_PATH`, `ASR_API_URL`
+- `SUBTITLE_SEGMENT_SECONDS`: target display duration for subtitles produced by local ASR (default `8`, range `1`–`30`). This controls how 30-second recognition results are split for display; it does not shorten the model's recognition context.
 - `DEVICE_PREFERENCE`: `auto`, `gpu`, or `cpu`
 - `COMPUTE_TYPE`: `auto`, `float16`, or `int8`
 - `TTS_MODE`: `kokoro`, `edge`, or `qwen` in the Settings UI; `speaches` remains a legacy compatibility route

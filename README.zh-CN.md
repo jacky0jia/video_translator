@@ -32,6 +32,8 @@ FFmpeg、Kokoro/loader、Qwen 模型及 runtime 由用户从固定上游来源�
 
 ## 功能
 
+源码版在 Dubbing 下增加可折叠的“输出视频”，显示原片实际参数及预计成片方案。默认“自动均衡”：非 AV1 跟随源编码和码率；AV1 硬编不可用时，采用体积受控的 HEVC/H.264，最高 1440p，不放大小视频、不改变帧率。也可选择“保持原分辨率”“保持源编码”或“自定义”；保留 AV1 可能需要耗时较长的 CPU 编码。会实际检查硬件能力，自定义编码不可用时提示，不静默更换。不叠加字幕或片尾说明时，无论输出策略如何，都直接保留原视频流。重新编码并非无损，体积为估算值而非保证。上述改进尚未包含在 alpha.5 便携下载包中。
+
 - 使用 faster-whisper 本地转写，长视频自动分块
 - 使用 LM Studio 本地模型翻译，兼容 Ollama 和 OpenAI-compatible API
 - 导出 SRT、VTT、ASS，支持译文、双语或原文字幕
@@ -141,6 +143,15 @@ Video Translator 默认连接 `http://127.0.0.1:1234/v1`。应用可以通过 `l
 .\start.bat
 ```
 
+启动脚本会使用当前环境的 `python` 完成依赖检查并启动 Uvicorn。如果不想先激活环境，也可以显式指定正确的解释器：
+
+```powershell
+$env:APP_PYTHON = "C:\path\to\your\env\python.exe"
+.\start.bat
+```
+
+如果启动脚本提示缺少软件包，请先在同一个 Python 环境中安装 `requirements.txt`，再重新运行。
+
 浏览器访问 <http://127.0.0.1:8769/>。
 
 如需使用其他端口：
@@ -178,6 +189,7 @@ Copy-Item config.example.yaml config.yaml
 - `LLM_PROVIDER`：`lm_studio`、`ollama` 或 `openai_compatible`
 - `LM_STUDIO_MODEL`、`LM_STUDIO_CLI_PATH`、`LM_STUDIO_TTL_SECONDS`
 - `ASR_MODEL_SIZE`、`ASR_MODEL_PATH`、`ASR_API_URL`
+- `SUBTITLE_SEGMENT_SECONDS`：本地 ASR 生成字幕的目标显示分片时间（默认 `8` 秒，范围 `1`–`30` 秒）。它用于把 30 秒识别结果切成便于显示的字幕，不会缩短模型的识别上下文。
 - `DEVICE_PREFERENCE`：`auto`、`gpu` 或 `cpu`
 - `COMPUTE_TYPE`：`auto`、`float16` 或 `int8`
 - `TTS_MODE`：标准设置界面为 `kokoro`、`edge`、`qwen`；`speaches` 仅为旧兼容路线

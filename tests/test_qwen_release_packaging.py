@@ -140,6 +140,16 @@ def test_ci_runs_the_unified_check_with_production_audit():
     assert workflow.count("npm audit --omit=dev --audit-level=high") == 0
 
 
+def test_ci_installs_and_validates_ffmpeg_before_release_checks():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    install = workflow.index("choco install ffmpeg")
+    executable_check = workflow.index("ffmpeg -version")
+    libass_check = workflow.index("ffmpeg -hide_banner -filters")
+    release_check = workflow.index("python packaging/release_check.py --production-audit")
+    assert install < executable_check < libass_check < release_check
+    assert "Select-String -Pattern 'subtitles'" in workflow
+
+
 def test_release_evidence_records_commit_assets_and_exact_check_scope():
     spec = importlib.util.spec_from_file_location(
         "release_check_evidence", ROOT / "packaging" / "release_check.py"

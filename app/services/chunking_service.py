@@ -1,4 +1,5 @@
 import logging
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,12 +10,41 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def bound_segments_to_duration(segments, duration):
+    """Discard ASR padding hallucinations and clip valid spans to real audio."""
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("Audio duration must be finite and positive")
+    bounded = []
+    for segment in segments:
+        if not math.isfinite(segment.start) or not math.isfinite(segment.end):
+            continue
+        start, end = max(0.0, segment.start), min(duration, segment.end)
+        # AAC extraction may include a few milliseconds of encoder padding.
+        # Do not retain a whole padded ASR sentence as a tiny clipped sliver.
+        if end <= start or (segment.end > duration and end - start < 0.05):
+            continue
+        bounded.append(segment.model_copy(update={"start": start, "end": end}))
+    if len(bounded) != len(segments):
+        logger.warning("Removed %s ASR segments outside real audio duration %.3fs",
+                       len(segments) - len(bounded), duration)
+    return bounded
+
+
 def deduplicate_segments(segments):
-    """Remove near-duplicate segments in overlap regions, keeping higher confidence."""
+    """Deduplicate matching overlapping text, never merely nearby timestamps."""
     segments = sorted(segments, key=lambda s: s.start)
     result = []
     for seg in segments:
-        if result and abs(seg.start - result[-1].start) < settings.DEDUPLICATE_THRESHOLD_SECONDS:
+        if (
+            result
+            and abs(seg.start - result[-1].start) < settings.DEDUPLICATE_THRESHOLD_SECONDS
+            and all(math.isfinite(value) for value in (
+                seg.start, seg.end, result[-1].start, result[-1].end,
+            ))
+            and seg.text.strip()
+            and seg.text.strip() == result[-1].text.strip()
+            and min(seg.end, result[-1].end) > max(seg.start, result[-1].start)
+        ):
             if seg.confidence > result[-1].confidence:
                 result[-1] = seg
         else:

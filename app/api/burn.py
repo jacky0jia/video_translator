@@ -5,7 +5,11 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from app.core.history import history_manager
+from app.core.events import emit_event
 from app.services.video_burn_service import video_burn_service
+from app.services.video_output import VideoOutputOptions
+from app.services.pipeline_service import pipeline_service
+from app.services.translation_review_service import TranslationReviewService, translation_busy
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,14 +22,25 @@ class BurnRequest(BaseModel):
     style: Optional[dict] = None
     target_lang: Optional[str] = None
     end_note_enabled: bool = True
+    # Omission keeps the legacy source-codec path for existing clients.
+    output_options: Optional[VideoOutputOptions] = None
 
 
-def _run_burn_task(task_id: str, show_source: bool, show_target: bool, style: Optional[dict], target_lang: Optional[str], end_note_enabled: bool):
+def _run_burn_task(task_id: str, show_source: bool, show_target: bool, style: Optional[dict], target_lang: Optional[str], end_note_enabled: bool, output_options: Optional[dict] = None):
     try:
-        video_burn_service.burn(task_id, show_source, show_target, style or {}, target_lang, end_note_enabled=end_note_enabled)
-    except Exception:
+        video_burn_service.burn(task_id, show_source, show_target, style or {}, target_lang,
+                                end_note_enabled=end_note_enabled, output_options=output_options)
+        data = {"status": "completed", "burn_status": "completed", "progress_percent": 100,
+                "message": "completed", "failed_stage": None}
+        history_manager.update_task(task_id, data)
+        emit_event(task_id, data)
+    except Exception as exc:
         logger.exception(f"Background burn task failed for {task_id}")
-        # Error state already updated inside burn()
+        # Validation can fail before burn() enters its own protected block.
+        data = {"status": "failed", "burn_status": "failed", "burn_error": str(exc),
+                "message": str(exc), "failed_stage": "burning"}
+        history_manager.update_task(task_id, data)
+        emit_event(task_id, data)
 
 
 @router.post("/burn")
@@ -34,6 +49,11 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if pipeline_service.is_busy(request.task_id) or translation_busy(request.task_id):
+        raise HTTPException(status_code=409, detail="Pipeline is still processing or stopping")
+    if request.show_target and task.get("translation_reviews"):
+        if not TranslationReviewService(history_manager).is_approved(request.task_id, request.target_lang or task.get("target_lang")):
+            raise HTTPException(status_code=409, detail="Review the current subtitles before rendering")
     video_path = task.get("upload_path") or task.get("source_path")
     if not video_path:
         raise HTTPException(status_code=400, detail="Source video path not found")
@@ -44,8 +64,24 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
 
     if task.get("burn_status") == "processing":
         raise HTTPException(status_code=409, detail="Burn already in progress")
+    if task.get("pipeline_status") == "awaiting_compression":
+        raise HTTPException(status_code=409, detail="Resolve the pending compression decision before rendering")
+    if task.get("pipeline_status") == "processing" or task.get("dubbing_status") == "processing":
+        raise HTTPException(status_code=409, detail="Processing already in progress")
 
-    history_manager.update_task(request.task_id, {"last_end_note_enabled": request.end_note_enabled})
+    # Reserve the standalone operation before BackgroundTasks can be delayed.
+    # Leave old output paths available, but never report them as this run's result.
+    data = {"status": "burning", "burn_status": "processing", "burn_error": None,
+            "message": "正在烧录字幕...", "progress_percent": 0,
+            "pipeline_status": None, "pipeline_stage": None, "gpu_stage": None,
+            "failed_stage": None, "cancelled_stage": None,
+            "last_process_route": "subtitles", "last_burn_enabled": True,
+            "last_end_note_enabled": request.end_note_enabled}
+    output_options = request.output_options.model_dump() if request.output_options is not None else None
+    if output_options is not None:
+        data['video_output_options'] = output_options
+    history_manager.update_task(request.task_id, data)
+    emit_event(request.task_id, data)
 
     background_tasks.add_task(
         _run_burn_task,
@@ -55,6 +91,7 @@ async def burn_video(request: BurnRequest, background_tasks: BackgroundTasks):
         request.style,
         request.target_lang,
         request.end_note_enabled,
+        output_options,
     )
 
     return {"status": "started", "task_id": request.task_id}

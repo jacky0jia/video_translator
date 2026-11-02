@@ -40,5 +40,14 @@ jobs:
         working-directory: app/frontend
         run: npm ci
 
+      - name: Install FFmpeg with subtitle support
+        run: |
+          choco install ffmpeg --no-progress --yes
+          ffmpeg -version
+          $filters = ffmpeg -hide_banner -filters 2>&1
+          if (-not ($filters | Select-String -Pattern 'subtitles')) {
+            throw "Installed FFmpeg does not provide the subtitles/libass filter"
+          }
+
       - name: Run release acceptance checks
         run: python packaging/release_check.py --production-audit

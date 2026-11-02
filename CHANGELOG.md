@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Use a fixed 30-second context with word timestamps for local speech recognition, then split recognized output into display subtitles using the configurable subtitle segment duration.
+- Serialize in-process history transactions across managers and atomically replace saved history; preserve unreadable or invalid records instead of silently replacing them with empty history.
+- Recover interrupted rendering pipelines as failed rather than leaving phantom running states after restart; classify TTS/translation model preparation by stage rather than displaying it as transcription.
+
+- Keep segmented progress and completion scoped to the selected workflow; switching from completed subtitles to unrun dubbing no longer marks dubbing/rendering complete.
+
+- Retry local ASR once on non-finite scores or pathological symbol repetition; fail explicitly if recovery still produces invalid output.
+- Read legacy null ASR confidence safely and preserve deliberately cleared subtitle rows without asking translation models to invent speech or shifting row numbers.
+
+- Add a collapsible Dubbing “Output video” section with real source metadata, capability-tested output plans, estimated size, and automatic-balanced / original-resolution / original-codec / custom choices.
+- Default AV1 hardware fallback to bounded-bitrate HEVC/H.264 at up to 1440p, retaining aspect ratio and frame timing. Keep source codec/resolution as an explicit choice, and preserve the original video stream when no visual overlays are requested.
+- Save output choices per task and through compression approval; scale subtitle layout to the selected output resolution.
+
+- Preserve the source video codec when burning subtitles or the end note (AV1, HEVC, H.264, VP9 and MPEG-4), rather than unconditionally converting to high-bitrate H.264.
+- Use source video bitrate, MKV stream bitrate tags, or an explicitly marked container-average estimate as a VBR size target. Retain original frame timing and resolution; re-encoding is not lossless and final size may vary.
+- Verify hardware encoder usability before rendering and replan hardware failures within the selected output strategy. Show localized CPU-rendering progress and clearly report missing encoders; source-codec and custom choices never silently switch codecs.
+
 ## 0.1.0-alpha.5 - 2026-10-06
 
 - Exclude Conda installation metadata/history and pip direct-install provenance from the portable Python runtime; these are not needed to run the application and can contain developer-local paths.

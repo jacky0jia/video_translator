@@ -76,6 +76,7 @@ ZIP. Unchanged ASR/TTS models and native assets may reuse prior hardware results
 - [ ] Run `python packaging/release_check.py --production-audit`.
 - [ ] Run the same command with `--qwen-archives-dir` and `--qwen-model-dir` on an NVIDIA release machine.
 - [ ] Confirm production dependency audit has no high-severity findings.
+- [ ] Review the full frontend audit against `FRONTEND-SECURITY.md`; verify build-only exposure boundaries and explicitly record accepted findings instead of calling the audit clean.
 - [ ] Confirm Qwen3-TTS licenses, notices, runtime manifest, and package manifest are included.
 - [ ] Install into a clean application directory and verify Qwen preset voices are listed.
 - [ ] Complete one Chinese, English, Japanese, and Korean dubbing task.

@@ -8,6 +8,8 @@ from app.core.config import settings
 from app.services.tts.registry import is_korean_language, resolve_tts_route
 from app.services.tts.voice_selection import resolve_available_voice
 from app.services.dubbing_service import dubbing_service, NATURAL_MAX_KOKORO_TEMPO, NATURAL_MAX_EDGE_TEMPO
+from app.services.video_output import VideoOutputOptions
+from app.services.translation_review_service import TranslationReviewService, translation_busy
 
 router = APIRouter()
 
@@ -25,6 +27,8 @@ class PipelineRequest(BaseModel):
     subtitle_style: dict = Field(default_factory=dict)
     force_translate: bool = False
     force_dub: bool = False
+    review_id: str | None = None
+    output_options: VideoOutputOptions = Field(default_factory=VideoOutputOptions)
 
 
 class CompressionDecision(BaseModel):
@@ -66,15 +70,10 @@ async def start_pipeline(request: PipelineRequest):
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        history_manager.update_task(
-            request.task_id,
-            {
-                "last_process_route": "dubbing",
-                "last_subtitle_format": request.subtitle_format.lower(),
-                "dubbing_burn_subtitles": request.burn_subtitles,
-                "last_end_note_enabled": request.end_note_enabled,
-            },
-        )
+        if pipeline_service.is_busy(request.task_id) or translation_busy(request.task_id):
+            raise RuntimeError("Pipeline already running")
+        if request.review_id and not request.force_translate:
+            TranslationReviewService(history_manager).approve(request.task_id, request.target_lang, request.review_id)
         pipeline_service.start(
             request.task_id,
             request.target_lang,
@@ -88,6 +87,7 @@ async def start_pipeline(request: PipelineRequest):
             request.force_translate,
             request.force_dub,
             end_note_enabled=request.end_note_enabled,
+            output_options=request.output_options.model_dump(),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -117,13 +117,10 @@ async def decide_compression(task_id: str, decision: CompressionDecision):
             request["subtitle_style"], request["subtitle_format"],
             force_dub=True, compress_translation=True,
             end_note_enabled=request.get("end_note_enabled", True),
+            output_options=request.get("output_options"),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    data = {"status": "pipeline_translating", "pipeline_status": "processing",
-            "pipeline_stage": "pipeline_translating", "message": "正在精简已确认的译文..."}
-    history_manager.update_task(task_id, data)
-    emit_event(task_id, data)
     return {"status": "started", "task_id": task_id}
 
 
@@ -131,4 +128,5 @@ async def decide_compression(task_id: str, decision: CompressionDecision):
 async def cancel_pipeline(task_id: str):
     if not await pipeline_service.cancel(task_id):
         raise HTTPException(status_code=409, detail="Pipeline is not running")
-    return {"status": "cancelled", "task_id": task_id}
+    task = history_manager.get_task(task_id) or {}
+    return {"status": "cancelling" if task.get("pipeline_cleanup_pending") else "cancelled", "task_id": task_id}

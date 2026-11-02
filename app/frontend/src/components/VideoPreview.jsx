@@ -1,10 +1,16 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useI18n } from '../contexts/I18nContext';
 import ProgressBar from './ProgressBar';
 import SubtitleStyleControls from './SubtitleStyleControls';
-import { findSubtitleOverlaps, parseSubtitleTime } from '../utils/subtitleTiming';
+import { parseSubtitleTime } from '../utils/subtitleTiming';
 import { subtitlePreviewLayout } from '../utils/subtitlePreviewLayout';
+import { buildSubtitleDisplay, placeSubtitleBlocks, subtitleBlocksAt } from '../utils/subtitleDisplay';
+import { subtitleReviewRows } from '../utils/subtitleReview';
+import { transcriptionReview } from '../utils/transcriptionReview';
+import { dubbingReviewView, dubbingIssueMessage } from '../utils/dubbingReview';
+import { useSubtitleDocument } from '../hooks/useSubtitleDocument';
+import SubtitleTimingNotice from './SubtitleTimingNotice';
 
 const FONT_LABEL_MAP = {
   'Arial': 'Arial',
@@ -66,13 +72,17 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const { t, lang: uiLang } = useI18n();
   const videoRef = useRef(null);
   const wrapperRef = useRef(null);
-  const subtitleRef = useRef(null);
+  const measurementRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [sourceSegments, setSourceSegments] = useState([]);
-  const [targetSegments, setTargetSegments] = useState([]);
-  const [subSource, setSubSource] = useState('');
-  const [subTarget, setSubTarget] = useState('');
-  const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' }
+  const [pendingReviewRow, setPendingReviewRow] = useState(null);
+  const [displayTime, setDisplayTime] = useState(0);
+  const [measurements, setMeasurements] = useState(null);
+  const [fontRevision, setFontRevision] = useState(0);
+  const [editingCell, setEditingCell] = useState(null); // { index: number, field: 'source' | 'target' | 'time' }
+  const editSessionRef = useRef(null);
+  const pendingSavesRef = useRef(new Map());
+  const mountedRef = useRef(false);
+  const [pendingSaves, setPendingSaves] = useState(() => new Map());
   const [editValue, setEditValue] = useState('');
   const [editStart, setEditStart] = useState('');
   const [editEnd, setEditEnd] = useState('');
@@ -83,6 +93,38 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   const [videoGeometry, setVideoGeometry] = useState({ containerWidth: 0, containerHeight: 0, videoWidth: 0, videoHeight: 0 });
 
   const { offsetY: subtitleOffsetY, fontSize: subtitleFontSize, sourceColor, targetColor, bold, fontFamily } = subtitleStyle || {};
+  const sourceDocument = useSubtitleDocument(task?.task_id, task?.transcription_path, task);
+  const targetPath = previewLang && task?.translations?.[previewLang] ? task.translations[previewLang] : task?.translation_path;
+  const targetDocument = useSubtitleDocument(task?.task_id, targetPath, task);
+  const { segments: sourceSegments, setSegments: setSourceSegments } = sourceDocument;
+  const { segments: targetSegments, setSegments: setTargetSegments } = targetDocument;
+  const targetData = targetDocument.data;
+  const targetReview = Array.isArray(targetData?.alignment_review_rows) ? {
+    rows: targetData.alignment_review_rows, check_incomplete: targetData.alignment_check_incomplete,
+  } : null;
+  // An editor belongs to one document; never carry its draft into another track.
+  useLayoutEffect(() => {
+    editSessionRef.current = null;
+    setEditingCell(null);
+  }, [task?.task_id, task?.transcription_path, targetPath]);
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; editSessionRef.current = null; };
+  }, []);
+  const savePending = pendingSaves.has(task?.task_id);
+  const savingCurrentEdit = savePending && pendingSaves.get(task?.task_id) === editingCell;
+  const acquireTimingUndo = useCallback(taskId => {
+    if (editSessionRef.current || pendingSavesRef.current.has(taskId)) return null;
+    const token = { kind: 'timing' };
+    pendingSavesRef.current.set(taskId, token);
+    setPendingSaves(new Map(pendingSavesRef.current));
+    return () => {
+      if (pendingSavesRef.current.get(taskId) === token) {
+        pendingSavesRef.current.delete(taskId);
+        if (mountedRef.current) setPendingSaves(new Map(pendingSavesRef.current));
+      }
+    };
+  }, []);
 
   useEffect(() => {
     fetch('/api/fonts')
@@ -123,10 +165,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       defaultLang = transKeys[0];
     }
     setPreviewLang(defaultLang);
-    setSourceSegments([]);
-    setTargetSegments([]);
-    setSubSource('');
-    setSubTarget('');
+    setDisplayTime(0);
     setEditingCell(null);
   }, [task?.task_id]);
 
@@ -174,6 +213,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       setVideoGeometry({
         containerWidth: bounds.width, containerHeight: bounds.height,
         videoWidth: video.videoWidth || 1920, videoHeight: video.videoHeight || 1080,
+        duration: video.duration,
       });
     };
     const observer = new ResizeObserver(update);
@@ -186,7 +226,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   // Track fullscreen state to keep subtitles visible
   useEffect(() => {
     const handleChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      setIsFullscreen(Boolean(wrapperRef.current && document.fullscreenElement === wrapperRef.current));
     };
     document.addEventListener('fullscreenchange', handleChange);
     return () => {
@@ -221,45 +261,29 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     onPreviewLangChange?.(previewLang);
   }, [previewLang, onPreviewLangChange]);
 
-  // Load segments when task or previewLang changes
+  const jumpToSubtitleRow = row => {
+    setSubtitleCollapsed(false);
+    setPendingReviewRow(row);
+  };
+
   useEffect(() => {
-    if (!task) return;
-    async function load() {
-      if (task.transcription_path) {
-        try {
-          const res = await fetch(task.transcription_path, { cache: 'no-store' });
-          const data = await res.json();
-          setSourceSegments(data.segments || []);
-        } catch (e) {
-          console.error('Failed to load source segments:', e);
-        }
-      }
-      const transPath = previewLang && task.translations?.[previewLang]
-        ? task.translations[previewLang]
-        : task.translation_path;
-      if (transPath) {
-        try {
-          const res = await fetch(transPath, { cache: 'no-store' });
-          const data = await res.json();
-          setTargetSegments(data.segments || []);
-        } catch (e) {
-          console.error('Failed to load target segments:', e);
-          setTargetSegments([]);
-        }
-      } else {
-        setTargetSegments([]);
-      }
+    if (subtitleCollapsed || pendingReviewRow === null) return;
+    const row = document.getElementById(`subtitle-row-${pendingReviewRow}`);
+    if (row) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.focus({ preventScroll: true });
+      setPendingReviewRow(null);
     }
-    load();
-  }, [task, previewLang]);
+  }, [subtitleCollapsed, pendingReviewRow, sourceSegments, targetSegments]);
 
   const handleTimeUpdate = () => {
-    const time = videoRef.current?.currentTime || 0;
-    const src = sourceSegments.find(s => time >= s.start && time <= s.end);
-    const tgt = targetSegments.find(s => time >= s.start && time <= s.end);
-    setSubSource(src ? src.text : '');
-    setSubTarget(tgt ? tgt.text : '');
+    setDisplayTime(videoRef.current?.currentTime || 0);
   };
+
+  const displayEvents = useMemo(() => buildSubtitleDisplay([
+    ...(showSource ? [{ role: 'source', segments: sourceSegments }] : []),
+    ...(showTarget ? [{ role: 'target', segments: targetSegments }] : []),
+  ]), [sourceSegments, targetSegments, showSource, showTarget]);
 
   const seekTo = (time) => {
     if (videoRef.current) {
@@ -268,25 +292,45 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
     }
   };
 
+  const beginEdit = (index, field) => {
+    const session = { index, field };
+    editSessionRef.current = session;
+    setEditingCell(session);
+  };
+  const cancelEdit = () => { editSessionRef.current = null; setEditingCell(null); };
+
   const startEdit = (index, field) => {
+    if (pendingSavesRef.current.get(task?.task_id)?.kind === 'timing') return;
+    if ((field !== 'target' && sourceDocument.status !== 'ready')
+      || (field === 'target' && targetDocument.status !== 'ready')
+      || (field === 'time' && !['ready', 'missing'].includes(targetDocument.status))) {
+      showToast(t('subtitleLoadReadOnly'), 'error');
+      return;
+    }
     if (field === 'time') {
       const segment = sourceSegments[index];
       if (!segment) return;
       setEditStart(formatTime(segment.start));
       setEditEnd(formatTime(segment.end));
-      setEditingCell({ index, field });
+      beginEdit(index, field);
       return;
     }
     const text = field === 'source'
       ? sourceSegments[index]?.text || ''
       : targetSegments[index]?.text || '';
-    setEditingCell({ index, field });
+    beginEdit(index, field);
     setEditValue(text);
   };
 
   const saveEdit = useCallback(async () => {
-    if (!task || !editingCell) return;
+    if (!task || !editingCell || editSessionRef.current !== editingCell || pendingSavesRef.current.has(task.task_id)) return;
     const { index, field } = editingCell;
+    if ((field !== 'target' && sourceDocument.status !== 'ready')
+      || (field === 'target' && targetDocument.status !== 'ready')
+      || (field === 'time' && !['ready', 'missing'].includes(targetDocument.status))) {
+      showToast(t('subtitleLoadReadOnly'), 'error');
+      return;
+    }
     const payload = {};
     if (field === 'source' && sourceSegments[index]?.text !== editValue) {
       payload.source_text = editValue;
@@ -307,44 +351,96 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
       }
     }
     if (Object.keys(payload).length === 0) {
-      setEditingCell(null);
+      cancelEdit();
       return;
     }
 
-    const res = await fetch(`/api/tasks/${task.task_id}/segments/${index}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const session = editingCell;
+    const isCurrent = () => mountedRef.current && editSessionRef.current === session;
+    // Serialize writes for a task, even if its editor is cancelled/reopened or
+    // selection moves A -> B -> A before the old response finishes.
+    pendingSavesRef.current.set(task.task_id, session);
+    setPendingSaves(new Map(pendingSavesRef.current));
+    try {
+      const res = await fetch(`/api/tasks/${task.task_id}/segments/${index}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    if (res.ok) {
-      if (payload.source_text !== undefined) {
-        setSourceSegments(prev => {
-          const next = [...prev];
-          next[index] = { ...next[index], text: editValue };
-          return next;
-        });
+      if (!mountedRef.current) return;
+
+      if (res.ok) {
+        // Document setters are scoped to their task/path independently of the
+        // editor. Update the saved baseline even if a new draft is open, but
+        // never replace its input or close it from the old response.
+        if (payload.source_text !== undefined) {
+          setSourceSegments(prev => {
+            const next = [...prev];
+            next[index] = { ...next[index], text: editValue, source_text_edited: true };
+            return next;
+          });
+        }
+        if (payload.target_text !== undefined) {
+          setTargetSegments(prev => {
+            const next = [...prev];
+            next[index] = { ...next[index], text: editValue };
+            return next;
+          });
+        }
+        if (payload.start !== undefined) {
+          setSourceSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
+          setTargetSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
+        }
+        if (isCurrent()) cancelEdit();
+        await onTaskRefresh?.(task.task_id);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        if (isCurrent()) showToast(t('save') + ' ' + (typeof err.detail === 'string' ? err.detail : t('unknownError')), 'error');
       }
-      if (payload.target_text !== undefined) {
-        setTargetSegments(prev => {
-          const next = [...prev];
-          next[index] = { ...next[index], text: editValue };
-          return next;
-        });
+    } catch (error) {
+      if (isCurrent()) showToast(t('save') + ' ' + (error.message || t('unknownError')), 'error');
+    } finally {
+      if (pendingSavesRef.current.get(task.task_id) === session) {
+        pendingSavesRef.current.delete(task.task_id);
+        if (mountedRef.current) setPendingSaves(new Map(pendingSavesRef.current));
       }
-      if (payload.start !== undefined) {
-        setSourceSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
-        setTargetSegments(prev => prev.map((segment, row) => row === index ? { ...segment, start: payload.start, end: payload.end } : segment));
-      }
-      setEditingCell(null);
-      await onTaskRefresh?.(task.task_id);
-    } else {
-      const err = await res.json().catch(() => ({}));
-      showToast(t('save') + ' ' + (err.detail || t('unknownError')), 'error');
     }
-  }, [task, editingCell, editValue, editStart, editEnd, sourceSegments, targetSegments, t, showToast, onTaskRefresh]);
+  }, [task, editingCell, editValue, editStart, editEnd, sourceSegments, targetSegments, sourceDocument.status, targetDocument.status, setSourceSegments, setTargetSegments, t, showToast, onTaskRefresh]);
 
-  const cancelEdit = () => setEditingCell(null);
+  const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
+  const metricScope = useMemo(() => ({}), [displayEvents, previewLayout.imageWidth, previewLayout.fontSize, bold, fontFamily, fontRevision, task?.task_id]);
+  useEffect(() => {
+    let cancelled = false;
+    const update = () => { if (!cancelled) setFontRevision(value => value + 1); };
+    document.fonts?.ready.then(update);
+    document.fonts?.addEventListener('loadingdone', update);
+    return () => { cancelled = true; document.fonts?.removeEventListener('loadingdone', update); };
+  }, []);
+  useLayoutEffect(() => {
+    const container = measurementRef.current;
+    if (!container || !previewLayout.imageWidth) return;
+    const measure = () => {
+      const heights = Object.fromEntries([...container.children].map(node => [node.dataset.blockId, Math.max(1, Math.ceil(node.getBoundingClientRect().height) + 2)]));
+      setMeasurements(previous => previous?.scope === metricScope && JSON.stringify(previous.heights) === JSON.stringify(heights) ? previous : { scope: metricScope, heights });
+    };
+    const observer = new ResizeObserver(measure);
+    [...container.children].forEach(node => observer.observe(node));
+    measure();
+    return () => observer.disconnect();
+  }, [metricScope]);
+  const placedBlocks = useMemo(() => measurements?.scope === metricScope
+    ? placeSubtitleBlocks(displayEvents.blocks, measurements.heights, 2 * previewLayout.imageWidth / 640) : [],
+    [metricScope, measurements, displayEvents, previewLayout.imageWidth]);
+  const displayBlocks = subtitleBlocksAt(placedBlocks, displayTime);
+  const imageHeight = previewLayout.imageWidth * videoGeometry.videoHeight / videoGeometry.videoWidth;
+  const availableHeight = imageHeight - 80 * imageHeight / videoGeometry.videoHeight - (subtitleOffsetY || 0) * previewLayout.imageWidth / 640;
+  // Warn about genuinely undisplayable rows, not ordinary temporal overlap.
+  const displayIssueRows = new Set([...displayEvents.invalidRows,
+    ...placedBlocks.filter(block => block.bottom + block.height > availableHeight + 1).map(block => block.row)]);
+  const renderParts = block => block.parts.map(line => <div key={line.track} data-subtitle-role={line.role} data-subtitle-row={block.row}
+    className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`}
+    style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1.15, color: line.role === 'source' ? sourceColor || '#FFFFFF' : targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{line.text}</div>);
 
   if (!task) {
     return (
@@ -353,23 +449,24 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
   }
 
   const maxLen = Math.max(sourceSegments.length, targetSegments.length);
-  const activeReview = task?.translation_alignment_review?.[previewLang || task?.target_lang] || {};
-  const reviewRows = new Set(activeReview.rows || []);
-  const overlapPairs = findSubtitleOverlaps(sourceSegments);
-  const overlapRows = new Set(overlapPairs.flat());
-  const previewLayout = subtitlePreviewLayout({ ...videoGeometry, fontSize: subtitleFontSize || 18, offsetY: subtitleOffsetY || 0 });
+  const activeReview = targetReview || task?.translation_alignment_review?.[previewLang || task?.target_lang] || {};
+  const reviewRows = new Set(subtitleReviewRows(activeReview.rows, targetSegments.length));
+  const dubbingReview = dubbingReviewView(task?.dubbing_review, previewLang || task?.target_lang, sourceSegments.length);
+  const dubbingRows = new Set(dubbingReview.rows);
+  const asrHints = transcriptionReview(sourceSegments, videoGeometry.duration);
+  const asrRows = new Map(asrHints.map(hint => [hint.row, hint.reason]));
   const isProcessing = !['transcribed', 'completed', 'failed', 'translation_failed', 'cancelled'].includes(task.status);
 
   return (
     <section className="app-panel p-4">
       <div className="app-panel-heading"><span className="app-step">02</span><div><h2>{t('videoPreview')}</h2><p>{t('previewPanelHint')}</p></div></div>
       <div ref={wrapperRef} className={`bg-black overflow-hidden ${isIOSFullscreen ? 'fixed inset-0 z-50 flex items-center justify-center rounded-none' : 'relative rounded-lg group'}`}>
-        <video ref={videoRef} className={`block ${isIOSFullscreen ? 'w-full h-full object-contain' : 'w-full'}`} controls controlsList="nofullscreen"
+        <video ref={videoRef} className={`block ${isFullscreen || isIOSFullscreen ? 'w-full h-full object-contain' : 'w-full'}`} controls controlsList="nofullscreen"
           playsInline
           webkit-playsinline="true"
           preload="metadata"
           src={task.video_url || `/video/${encodeURIComponent(task.filename)}`}
-          onTimeUpdate={handleTimeUpdate}></video>
+          onTimeUpdate={handleTimeUpdate} onSeeked={handleTimeUpdate}></video>
         {isIOSFullscreen && (
           <button
             onClick={() => setIsIOSFullscreen(false)}
@@ -397,12 +494,15 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
           )}
         </button>
         <div
-          ref={subtitleRef}
-          className="absolute left-1/2 z-[9999] -translate-x-1/2 text-center pointer-events-none break-words"
-          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth}px`, paddingInline: '5%' }}
+          className="absolute left-1/2 z-10 -translate-x-1/2 text-center pointer-events-none break-words"
+          data-subtitle-overlay
+          style={{ bottom: `${previewLayout.bottom}px`, width: `${previewLayout.imageWidth * 0.9}px`, height: 0 }}
         >
-          {showSource && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, marginBottom: showTarget ? `${previewLayout.lineGap}px` : 0, color: sourceColor || '#FFFFFF', fontFamily: fontFamily || 'Arial' }}>{subSource}</div>}
-          {showTarget && <div className={`drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)] ${bold ? 'font-bold' : 'font-normal'}`} style={{ fontSize: `${previewLayout.fontSize}px`, lineHeight: 1, color: targetColor || '#FDE047', fontFamily: fontFamily || 'Arial' }}>{subTarget}</div>}
+          {displayBlocks.map(block => <div key={block.id} data-subtitle-block={block.id} style={{ position: 'absolute', width: '100%', bottom: block.bottom }}>{renderParts(block)}</div>)}
+        </div>
+        <div ref={measurementRef} aria-hidden="true" className="absolute text-center pointer-events-none break-words"
+          style={{ visibility: 'hidden', height: 0, overflow: 'hidden', width: `${previewLayout.imageWidth * 0.9}px` }}>
+          {displayEvents.blocks.map(block => <div key={block.id} data-block-id={block.id}>{renderParts(block)}</div>)}
         </div>
       </div>
 
@@ -431,14 +531,31 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
 
       {/* Subtitle Timeline Table */}
       <div className="mt-5">
-        {overlapPairs.length > 0 && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
-          <p>{t('subtitleOverlapNotice')}</p>
-          <div className="mt-2 flex flex-wrap gap-2">{overlapPairs.map(([first, second]) => <button key={`${first}-${second}`} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => { setSubtitleCollapsed(false); requestAnimationFrame(() => document.getElementById(`subtitle-row-${first}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })); }}>#{first}–#{second}</button>)}</div>
+        <SubtitleTimingNotice task={task} blocked={!!editingCell || savePending} acquireUndo={acquireTimingUndo} onTaskRefresh={onTaskRefresh} onJump={jumpToSubtitleRow} />
+        {[['source', sourceDocument], ['target', targetDocument]].filter(([, document]) => document.status === 'error').map(([track, document]) => <div key={track} role="alert" data-subtitle-load-error={track} className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t(track === 'source' ? 'sourceSubtitleLoadFailed' : 'targetSubtitleLoadFailed')}</p>
+          <p className="mt-1 text-xs">{t('subtitleLoadReadOnly')}</p>
+          <button type="button" onClick={document.reload} className="mt-2 underline">{t('retrySubtitleLoad')}</button>
+        </div>)}
+        {dubbingReview.active && <div role="note" data-testid="dubbing-sync-notice" className="mb-3 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-950 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100">
+          <p>{t('dubbingSyncNotice')}</p>
+          {task.dubbing_review.needs_recheck && <p className="mt-1">{t('dubbingSyncRecheck')}</p>}
+          {!dubbingReview.issues.length && <p className="mt-1">{t('dubbingSyncNoMeasurements')}</p>}
+          <div className="mt-2 flex flex-wrap gap-2">{dubbingReview.rows.map(row => <a key={row} href={`#subtitle-row-${row}`} onClick={event => { event.preventDefault(); jumpToSubtitleRow(row); }} className="rounded border border-rose-500 px-2 py-0.5 underline">#{row}</a>)}</div>
+          {dubbingReview.issues.length > 0 && <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">{dubbingReview.issues.map((issue, index) => <li key={index}>#{issue.rows.join(', #')}: {issue.measured ? dubbingIssueMessage(issue, t('dubbingSyncMeasurements')) : t('dubbingSyncNoMeasurements')}</li>)}</ul>}
+        </div>}
+        {asrHints.length > 0 && <div role="note" data-testid="asr-review-notice" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t('asrReviewNotice')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">{asrHints.map(({ row, reason }) => <button key={row} type="button" title={t(reason)} className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>
+        </div>}
+        {displayIssueRows.size > 0 && <div role="note" data-subtitle-overflow className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <p>{t('subtitleOverflowNotice')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">{[...displayIssueRows].sort((a, b) => a - b).map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>
         </div>}
         {(reviewRows.size > 0 || activeReview.check_incomplete) && <div role="note" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           <p>{t('alignmentReviewNotice')}</p>
           {activeReview.check_incomplete && <p className="mt-1">{t('alignmentAuditUnavailable')}</p>}
-          {reviewRows.size > 0 && <div className="mt-2 flex flex-wrap gap-2">{[...reviewRows].map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => { setSubtitleCollapsed(false); requestAnimationFrame(() => document.getElementById(`subtitle-row-${row}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })); }}>#{row}</button>)}</div>}
+          {reviewRows.size > 0 && <div className="mt-2 flex flex-wrap gap-2">{[...reviewRows].map(row => <button key={row} type="button" className="rounded border border-amber-500 px-2 py-0.5 underline" onClick={() => jumpToSubtitleRow(row)}>#{row}</button>)}</div>}
         </div>}
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-300">{t('subtitleTimeline')}</h3>
@@ -473,13 +590,14 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                 const isEditingTime = editingCell?.index === i && editingCell?.field === 'time';
                 const textareaRows = Math.max(3, editValue.split('\n').length);
                 return (
-                  <tr key={i} id={`subtitle-row-${i + 1}`} role="row" title={overlapRows.has(i + 1) ? t('subtitleOverlapRow') : reviewRows.has(i + 1) ? t('alignmentReviewRow') : undefined}
-                    className={`${overlapRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
+                  <tr key={i} id={`subtitle-row-${i + 1}`} tabIndex={-1} role="row" title={[dubbingRows.has(i + 1) ? t('dubbingSyncRow') : '', asrRows.has(i + 1) ? t(asrRows.get(i + 1)) : '', displayIssueRows.has(i + 1) ? t('subtitleOverflowNotice') : '', reviewRows.has(i + 1) ? t('alignmentReviewRow') : ''].filter(Boolean).join(' · ') || undefined}
+                    className={`${dubbingRows.has(i + 1) ? 'bg-rose-100/80 dark:bg-rose-900/30' : asrRows.has(i + 1) || displayIssueRows.has(i + 1) || reviewRows.has(i + 1) ? 'bg-amber-100/80 dark:bg-amber-900/30' : isEditingSource || isEditingTarget || isEditingTime ? 'bg-gray-100 dark:bg-slate-700' : 'hover:bg-gray-100/50 dark:hover:bg-slate-700/50'} transition`}>
                     <td role="cell" data-label={t('time')} className="app-subtitle-time px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                      <span className="text-xs text-slate-400">#{i + 1}</span>
                       {isEditingTime ? <div className="flex flex-col gap-1">
-                        <input aria-label={t('startTime')} value={editStart} onChange={e => setEditStart(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
-                        <input aria-label={t('endTime')} value={editEnd} onChange={e => setEditEnd(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
-                        <div className="flex gap-1"><button onClick={saveEdit} className="rounded bg-green-600 px-2 py-0.5 text-white">{t('save')}</button><button onClick={cancelEdit} className="rounded bg-gray-500 px-2 py-0.5 text-white">{t('cancel')}</button></div>
+                        <input aria-label={t('startTime')} value={editStart} disabled={savingCurrentEdit} onChange={e => setEditStart(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
+                        <input aria-label={t('endTime')} value={editEnd} disabled={savingCurrentEdit} onChange={e => setEditEnd(e.target.value)} className="w-24 rounded border px-1 py-0.5 text-slate-900" />
+                        <div className="flex gap-1"><button onClick={saveEdit} disabled={savePending} className="rounded bg-green-600 px-2 py-0.5 text-white">{t('save')}</button><button onClick={cancelEdit} className="rounded bg-gray-500 px-2 py-0.5 text-white">{t('cancel')}</button></div>
                       </div> : src || tgt ? (
                         <div className="flex items-center gap-1"><span
                           onClick={() => seekTo((src || tgt).start)}
@@ -495,6 +613,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                         <div className="flex items-start gap-2">
                           <textarea
                             value={editValue}
+                            disabled={savingCurrentEdit}
                             onChange={e => setEditValue(e.target.value)}
                             onKeyDown={e => {
                               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
@@ -504,14 +623,16 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                             className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-500 text-slate-900 dark:text-white resize-none"
                           />
                           <div className="flex flex-col gap-1">
-                            <button onClick={saveEdit}
+                            <button onClick={saveEdit} disabled={savePending}
                               className="px-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs">{t('save')}</button>
                             <button onClick={cancelEdit}
                               className="px-2 py-1 bg-gray-400 hover:bg-gray-500 dark:bg-slate-600 dark:hover:bg-slate-500 text-white rounded text-xs">{t('cancel')}</button>
                           </div>
                         </div>
                       ) : (
-                        <span onClick={() => startEdit(i, 'source')} className="text-slate-800 dark:text-slate-200 cursor-pointer">{src?.text || ''}</span>
+                        <span role={src ? 'button' : undefined} tabIndex={src ? 0 : undefined} aria-label={src ? `${t('source')} #${i + 1}` : undefined} onClick={src ? () => startEdit(i, 'source') : undefined}
+                          onKeyDown={e => { if (src && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); startEdit(i, 'source'); } }}
+                          className="block min-h-[1.5rem] text-slate-800 dark:text-slate-200 cursor-pointer">{src ? src.text || <span className="text-slate-400">{t('emptySubtitleEdit')}</span> : ''}</span>
                       )}
                     </td>
                     <td role="cell" data-label={t('target')} className="px-3 py-2">
@@ -519,6 +640,7 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                         <div className="flex items-start gap-2">
                           <textarea
                             value={editValue}
+                            disabled={savingCurrentEdit}
                             onChange={e => setEditValue(e.target.value)}
                             onKeyDown={e => {
                               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
@@ -528,14 +650,16 @@ export default function VideoPreview({ task, subtitleStyle, onSubtitleStyleChang
                             className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-500 text-slate-900 dark:text-white resize-none"
                           />
                           <div className="flex flex-col gap-1">
-                            <button onClick={saveEdit}
+                            <button onClick={saveEdit} disabled={savePending}
                               className="px-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs">{t('save')}</button>
                             <button onClick={cancelEdit}
                               className="px-2 py-1 bg-gray-400 hover:bg-gray-500 dark:bg-slate-600 dark:hover:bg-slate-500 text-white rounded text-xs">{t('cancel')}</button>
                           </div>
                         </div>
                       ) : (
-                        <span onClick={() => startEdit(i, 'target')} className="text-yellow-600 dark:text-yellow-300 cursor-pointer">{tgt?.text || ''}</span>
+                        <span role={tgt ? 'button' : undefined} tabIndex={tgt ? 0 : undefined} aria-label={tgt ? `${t('target')} #${i + 1}` : undefined} onClick={tgt ? () => startEdit(i, 'target') : undefined}
+                          onKeyDown={e => { if (tgt && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); startEdit(i, 'target'); } }}
+                          className="block min-h-[1.5rem] text-yellow-600 dark:text-yellow-300 cursor-pointer">{tgt ? tgt.text || <span className="text-slate-400">{t('emptySubtitleEdit')}</span> : ''}</span>
                       )}
                     </td>
                   </tr>

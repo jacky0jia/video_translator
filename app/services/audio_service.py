@@ -1,6 +1,7 @@
 import logging
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -26,27 +27,31 @@ class AudioExtractionService:
         Supports both local paths and FastAPI UploadFile objects.
         """
         self._verify_ffmpeg()
-
-        # 1. Resolve input path
-        if isinstance(input_source, UploadFile):
-            # Save upload to temp file first
-            temp_input = settings.TEMP_DIR / f"input_{input_source.filename}"
-            settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-            with open(temp_input, "wb") as buffer:
-                # Read in chunks to avoid memory overflow for large videos
-                while content := await input_source.read(1024 * 1024):
-                    buffer.write(content)
-            source_path = str(temp_input)
-            is_temporary_input = True
-        else:
-            source_path = input_source
-            is_temporary_input = False
-
-        # 2. Define output path
-        output_audio = settings.TEMP_DIR / f"extracted_{Path(source_path).stem}.wav"
         settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-
+        temp_input = None
+        output_audio = None
+        succeeded = False
         try:
+            # Atomically reserve invocation-owned names, even for the same source.
+            # Never use the untrusted upload filename as a filesystem path.
+            if isinstance(input_source, UploadFile):
+                descriptor, name = tempfile.mkstemp(
+                    prefix="input_", suffix=".media", dir=settings.TEMP_DIR
+                )
+                temp_input = Path(name)
+                with os.fdopen(descriptor, "wb") as buffer:
+                    while content := await input_source.read(1024 * 1024):
+                        buffer.write(content)
+                source_path = str(temp_input)
+            else:
+                source_path = input_source
+
+            descriptor, name = tempfile.mkstemp(
+                prefix="extracted_", suffix=".wav", dir=settings.TEMP_DIR
+            )
+            output_audio = Path(name)
+            os.close(descriptor)
+
             # Using subprocess directly for better control over the bundled ffmpeg path
             # Command: ffmpeg -i [input] -vn -acodec pcm_s16le -ar 16000 -ac 1 [output]
             # -vn: disable video
@@ -71,22 +76,27 @@ class AudioExtractionService:
             ]
 
             logger.info(f"Running FFmpeg command: {' '.join(cmd)}")
-            result = subprocess.run(
+            subprocess.run(
                 cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True
             )
+            succeeded = True
+            return output_audio
 
         except subprocess.CalledProcessError as e:
             logger.error(f"FFmpeg error: {e.stderr}")
             raise RuntimeError(f"Failed to extract audio: {e.stderr}")
         finally:
-            # Clean up the temporary input file if it was an upload
-            if is_temporary_input:
+            # Never remove another invocation's input or successful audio.
+            owned_paths = [temp_input]
+            if not succeeded:
+                owned_paths.append(output_audio)
+            for owned_path in owned_paths:
+                if owned_path is None:
+                    continue
                 try:
-                    os.remove(source_path)
-                except OSError:
-                    pass
-
-        return output_audio
+                    owned_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Failed to clean extraction temporary file %s: %s", owned_path, exc)
 
     async def cleanup_audio(self, audio_path: Path):
         """Deletes the temporary audio file."""

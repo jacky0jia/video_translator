@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import unquote
+from uuid import uuid4
 
 from app.core.config import settings
-from app.core.events import emit_event
+from app.core.output_paths import output_reference_path
+from app.core.events import emit_event, task_event_snapshot
 from app.core.history import history_manager
+from app.core.task_run import TaskRun, current_task_run, task_run_scope
+from app.services.translation_review_service import TranslationReviewService, translation_busy
+from app.services.dubbing_review import dubbing_review_record
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +27,66 @@ class PipelineService:
         self._dub_stage = dub_stage
         self._burn_stage = burn_stage
         self._tasks: dict[str, asyncio.Task] = {}
+        self._workers: dict[str, set[asyncio.Task]] = {}
+        self._runs: dict[str, TaskRun] = {}
+
+    def is_busy(self, task_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        return bool((task and not task.done()) or any(
+            not worker.done() for worker in self._workers.get(task_id, ())
+        ))
+
+    def _finish_cleanup(self, task_id: str, run: TaskRun | None) -> None:
+        if not run or any(not worker.done() for worker in self._workers.get(task_id, ())):
+            return
+        try:
+            with run.lock:
+                state = history_manager.finish_pipeline_cleanup(task_id, run.run_id)
+                if state:
+                    # This is the controller's compare-and-set cleanup, not a
+                    # revoked worker regaining permission to write.
+                    with task_run_scope(None):
+                        emit_event(task_id, task_event_snapshot(state))
+        except Exception:
+            logger.exception("Unable to publish pipeline cleanup for %s", task_id)
+
+    async def _run_thread_stage(self, task_id: str, function: Callable, *args) -> Any:
+        # Cancelling an asyncio waiter does not stop a Python worker thread.
+        # Keep its future alive and owned until the real function exits.
+        run = current_task_run(task_id)
+
+        def invoke():
+            if run:
+                with run.lock:
+                    if not run.active:
+                        raise RuntimeError("Pipeline stage was cancelled before the worker started")
+            return function(*args)
+
+        worker = asyncio.create_task(asyncio.to_thread(invoke))
+        workers = self._workers.setdefault(task_id, set())
+        workers.add(worker)
+
+        def finished(completed):
+            workers.discard(completed)
+            if not workers and self._workers.get(task_id) is workers:
+                self._workers.pop(task_id, None)
+            if not completed.cancelled():
+                completed.exception()  # retrieve a late exception after cancellation
+            self._finish_cleanup(task_id, run)
+
+        worker.add_done_callback(finished)
+        return await asyncio.shield(worker)
+
+    async def _run_owned(self, run: TaskRun, *args) -> None:
+        with task_run_scope(run):
+            run.started = True
+            try:
+                await self.run(run.task_id, *args)
+            finally:
+                with run.lock:
+                    run.active = False
+                if self._tasks.get(run.task_id) is asyncio.current_task():
+                    self._tasks.pop(run.task_id, None)
 
     def _set_stage(self, task_id: str, stage: str, message: str, progress: int) -> None:
         data = {
@@ -45,21 +110,18 @@ class PipelineService:
         persisted = str((task or {}).get("message") or "").strip()
         return persisted or exc.__class__.__name__
 
-    @staticmethod
-    def _artifact_exists(value: str | None) -> bool:
-        if not value:
+    @classmethod
+    def _artifact_exists(cls, value: str | None) -> bool:
+        """Require a regular nonempty file, not merely an existing path."""
+        try:
+            path = cls._artifact_path(value)
+            return bool(path and path.is_file() and path.stat().st_size > 0)
+        except (OSError, ValueError):
             return False
-        if value.startswith("/static/output/"):
-            return (Path(settings.OUTPUT_DIR) / Path(unquote(value)).name).exists()
-        return Path(value).exists()
 
     @staticmethod
     def _artifact_path(value: str | None) -> Path | None:
-        if not value:
-            return None
-        if value.startswith("/static/output/"):
-            return Path(settings.OUTPUT_DIR) / Path(unquote(value)).name
-        return Path(value)
+        return output_reference_path(value)
 
     @classmethod
     def _can_reuse_dubbing(
@@ -74,7 +136,7 @@ class PipelineService:
             if task["dubbing_provider_signature"] != synthesis_signature(provider):
                 return False
         return (
-            task.get("dubbing_status") == "completed"
+            task.get("dubbing_status") == "completed" and not task.get("dubbing_review")
             and task.get("dubbing_target_lang") == target_lang
             and task.get("dubbing_voice") == voice
             and abs(float(task.get("dubbing_speed", -1)) - float(speed)) < 0.0001
@@ -126,7 +188,7 @@ class PipelineService:
 
     async def _default_dub(self, task_id: str, target_lang: str, voice: str, speed: float) -> None:
         from app.services.dubbing_service import dubbing_service
-        await asyncio.to_thread(dubbing_service.dub, task_id, target_lang, voice, speed, None)
+        await self._run_thread_stage(task_id, dubbing_service.dub, task_id, target_lang, voice, speed, None)
 
     async def _compress_translation(self, task_id: str, target_lang: str) -> None:
         import json
@@ -157,6 +219,7 @@ class PipelineService:
             "translation_path": str(output_path), "translations": translations,
             "subtitle_outputs": {}, "compression_attempts": attempt,
             "compression_revisions": revisions, "compression_request": None,
+            "dubbing_review": {**task["dubbing_review"], "needs_recheck": True} if task.get("dubbing_review") else None,
         })
 
     async def _default_burn(
@@ -168,9 +231,11 @@ class PipelineService:
         subtitle_style: dict[str, Any],
         video_path: Path,
         end_note_enabled: bool,
+        output_options: dict | None = None,
     ) -> None:
         from app.services.video_burn_service import video_burn_service
-        await asyncio.to_thread(
+        await self._run_thread_stage(
+            task_id,
             video_burn_service.burn,
             task_id,
             show_source,
@@ -180,7 +245,16 @@ class PipelineService:
             str(video_path),
             "dubbing_video_path",
             end_note_enabled,
+            output_options,
         )
+
+    def _review_translation(self, task_id: str, target_lang: str, *, regenerated=False) -> bool:
+        if regenerated:
+            TranslationReviewService(history_manager).request(task_id, target_lang)
+        if TranslationReviewService(history_manager).pause(task_id, target_lang):
+            emit_event(task_id, task_event_snapshot(history_manager.get_task(task_id)))
+            return True
+        return False
 
     async def run(
         self,
@@ -197,6 +271,7 @@ class PipelineService:
         force_dub: bool = False,
         compress_translation: bool = False,
         end_note_enabled: bool = False,
+        output_options: dict | None = None,
     ) -> None:
         try:
             task = history_manager.get_task(task_id)
@@ -210,6 +285,7 @@ class PipelineService:
 
             task = history_manager.get_task(task_id) or {}
             translation_path = (task.get("translations") or {}).get(target_lang)
+            regenerated = False
             if (
                 force_translate
                 or not translation_path
@@ -218,10 +294,15 @@ class PipelineService:
                 self._set_stage(task_id, "pipeline_translating", "正在翻译...", 40)
                 stage = self._translate_stage or self._default_translate
                 await stage(task_id, target_lang)
+                regenerated = True
 
             if compress_translation:
                 self._set_stage(task_id, "pipeline_translating", "正在精简已确认的译文...", 60)
                 await self._compress_translation(task_id, target_lang)
+                regenerated = True
+
+            if self._review_translation(task_id, target_lang, regenerated=regenerated):
+                return
 
             task = history_manager.get_task(task_id) or {}
             subtitle_path = (task.get("subtitle_outputs") or {}).get(subtitle_format)
@@ -240,8 +321,10 @@ class PipelineService:
             task = history_manager.get_task(task_id) or {}
             raw_video_value = task.get("dubbing_raw_video_path") or task.get("dubbing_video_path")
             raw_video = self._artifact_path(raw_video_value)
-            if not raw_video or not raw_video.exists():
-                raise RuntimeError("Dubbing did not produce a video output")
+            if not self._artifact_exists(raw_video_value):
+                raise RuntimeError("Dubbing did not produce a non-empty video output")
+            if not self._artifact_exists(task.get("dubbing_audio_path")):
+                raise RuntimeError("Dubbing did not produce a non-empty audio output")
 
             if burn_subtitles or end_note_enabled:
                 self._set_stage(task_id, "pipeline_rendering", "正在渲染最终视频...", 90)
@@ -254,6 +337,7 @@ class PipelineService:
                     subtitle_style or {},
                     raw_video,
                     end_note_enabled,
+                    **({'output_options': output_options} if output_options is not None else {}),
                 )
                 history_manager.update_task(task_id, {
                     "dubbing_burn_subtitles": burn_subtitles,
@@ -269,6 +353,11 @@ class PipelineService:
                     },
                 )
 
+            task = history_manager.get_task(task_id) or {}
+            for field, label in (("dubbing_audio_path", "audio"), ("dubbing_video_path", "video")):
+                if not self._artifact_exists(task.get(field)):
+                    raise RuntimeError(f"Pipeline did not produce a non-empty {label} output")
+
             data = {
                 "status": "completed", "pipeline_status": "completed",
                 "pipeline_stage": "completed", "message": "完整流水线处理完成",
@@ -276,38 +365,67 @@ class PipelineService:
                 "failed_stage": None,
                 "cancelled_stage": None,
                 "outputs_stale": False,
+                "dubbing_review": None,
             }
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)
         except asyncio.CancelledError:
-            data = {
-                "status": "cancelled", "pipeline_status": "cancelled",
-                "message": "流水线已取消", "cancelled_stage": (history_manager.get_task(task_id) or {}).get("pipeline_stage"),
-            }
-            history_manager.update_task(task_id, data)
-            emit_event(task_id, data)
+            run = current_task_run(task_id)
+            # Publish cancellation and close the write lease under one lock;
+            # no retiring worker can publish a later success/failure/progress.
+            with run.lock if run else nullcontext():
+                persisted = history_manager.get_task(task_id) or {}
+                data = {
+                    "status": "cancelled", "pipeline_status": "cancelled",
+                    "message": "流水线已取消", "cancelled_stage": persisted.get("pipeline_stage"),
+                }
+                pending = any(not worker.done() for worker in self._workers.get(task_id, ()))
+                data["pipeline_cleanup_pending"] = pending
+                if pending:
+                    data.update({"status": "pipeline_cancelling", "pipeline_status": "cancelling",
+                                 "message": "已请求取消，正在等待后台工作线程退出，请稍候..."})
+                for stage in ("dubbing", "burn"):
+                    if persisted.get(f"{stage}_status") == "processing":
+                        data[f"{stage}_status"] = "cancelled"
+                        data[f"{stage}_error"] = "流水线已取消"
+                history_manager.update_task(task_id, data)
+                emit_event(task_id, data)
+                if run:
+                    run.active = False
             raise
         except Exception as exc:
             from app.services.dubbing_service import DubbingCompressionRequired
             if isinstance(exc, DubbingCompressionRequired):
                 task = history_manager.get_task(task_id) or {}
+                review = dubbing_review_record(exc, target_lang)
                 if int(task.get("compression_attempts") or 0) < 2 and exc.segment_indices:
                     data = {
                         "status": "awaiting_compression", "pipeline_status": "awaiting_compression",
                         "pipeline_stage": "pipeline_dubbing", "message": str(exc),
+                        "dubbing_review": review,
                         "compression_request": {
                             "segment_indices": exc.segment_indices, "target_lang": target_lang,
                             "voice": voice, "speed": speed, "burn_subtitles": burn_subtitles,
                             "show_source": show_source, "show_target": show_target,
                             "subtitle_style": subtitle_style or {}, "subtitle_format": subtitle_format,
                             "end_note_enabled": end_note_enabled,
+                            "output_options": output_options,
                         },
                     }
                     history_manager.update_task(task_id, data)
                     emit_event(task_id, data)
                     return
                 if int(task.get("compression_attempts") or 0) >= 2:
-                    exc = RuntimeError("两轮译文精简后仍无法保持字幕同步。请手动检查译文或更换音色。")
+                    data = {
+                        "status": "awaiting_dubbing_edit", "pipeline_status": "awaiting_dubbing_edit",
+                        "pipeline_stage": None, "gpu_stage": None, "progress_percent": 0,
+                        "dubbing_status": "awaiting_edit", "dubbing_review": review,
+                        "compression_request": None, "failed_stage": None,
+                        "message": "两轮精简后仍有配音同步问题。请修改标记的字幕，再点击继续重新测量。",
+                    }
+                    history_manager.update_task(task_id, data)
+                    emit_event(task_id, data)
+                    return
             logger.exception("Pipeline failed for task %s", task_id)
             task = history_manager.get_task(task_id) or {}
             data = {
@@ -319,7 +437,8 @@ class PipelineService:
             history_manager.update_task(task_id, data)
             emit_event(task_id, data)
         finally:
-            self._tasks.pop(task_id, None)
+            if self._tasks.get(task_id) is asyncio.current_task():
+                self._tasks.pop(task_id, None)
 
     def start(
         self,
@@ -336,13 +455,41 @@ class PipelineService:
         force_dub: bool = False,
         compress_translation: bool = False,
         end_note_enabled: bool = False,
+        output_options: dict | None = None,
     ) -> asyncio.Task:
         current = self._tasks.get(task_id)
         if current and not current.done():
             raise RuntimeError("Pipeline already running")
-        task = asyncio.create_task(
-            self.run(
-                task_id,
+        if any(not worker.done() for worker in self._workers.get(task_id, ())):
+            raise RuntimeError("Previous pipeline stage is still stopping; retry after it finishes")
+        persisted = history_manager.get_task(task_id)
+        if not persisted:
+            raise RuntimeError("Task not found")
+        if persisted.get("burn_status") == "processing" or persisted.get("dubbing_status") == "processing":
+            raise RuntimeError("Previous task stage is still stopping or processing")
+        if translation_busy(task_id):
+            raise RuntimeError("Translation is still processing")
+        loop = asyncio.get_running_loop()
+        run = TaskRun(task_id, uuid4().hex)
+        # A successful start response must never expose the previous terminal
+        # snapshot, even before the scheduled coroutine gets its first turn.
+        starting = {
+            "status": "pipeline_starting", "pipeline_status": "processing",
+            "pipeline_stage": None, "gpu_stage": None,
+            "message": "正在启动流水线...", "progress_percent": 0,
+            "failed_stage": None, "cancelled_stage": None,
+            "pipeline_run_id": run.run_id,
+            "pipeline_cleanup_pending": False,
+            "last_process_route": "dubbing", "last_subtitle_format": subtitle_format.lower(),
+            "dubbing_burn_subtitles": burn_subtitles, "last_end_note_enabled": end_note_enabled,
+            "video_output_options": dict(output_options or {}),
+        }
+        state = history_manager.update_task(task_id, starting)
+        if isinstance(state, dict):
+            starting["state_revision"] = state["state_revision"]
+        task = loop.create_task(
+            self._run_owned(
+                run,
                 target_lang,
                 voice,
                 speed,
@@ -355,10 +502,23 @@ class PipelineService:
                 force_dub,
                 compress_translation,
                 end_note_enabled,
+                output_options,
             ),
             name=f"pipeline-{task_id}",
         )
         self._tasks[task_id] = task
+        self._runs[task_id] = run
+
+        def finished(completed):
+            with run.lock:
+                run.active = False
+            if self._tasks.get(task_id) is completed:
+                self._tasks.pop(task_id, None)
+            if self._runs.get(task_id) is run:
+                self._runs.pop(task_id, None)
+
+        task.add_done_callback(finished)
+        emit_event(task_id, starting)
         return task
 
     async def cancel(self, task_id: str) -> bool:
@@ -367,6 +527,16 @@ class PipelineService:
             return False
         from app.services.dubbing_service import dubbing_service
         dubbing_was_active = dubbing_service.request_cancel(task_id)
+        run = self._runs.get(task_id)
+        if run and not run.started:
+            # A task cancelled before its first turn never enters run()'s
+            # CancelledError handler, so publish and revoke it here.
+            with task_run_scope(run), run.lock:
+                data = {"status": "cancelled", "pipeline_status": "cancelled",
+                        "message": "流水线已取消", "cancelled_stage": None}
+                history_manager.update_task(task_id, data)
+                emit_event(task_id, data)
+                run.active = False
         task.cancel()
         try:
             await task

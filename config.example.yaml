@@ -1,6 +1,6 @@
 # Copy this file to config.yaml to override application defaults.
 # config.yaml is ignored by Git because it may contain local paths or API keys.
-CONFIG_VERSION: 1
+CONFIG_VERSION: 2
 
 # Translation provider: lm_studio | ollama | openai_compatible
 LLM_PROVIDER: lm_studio
@@ -23,7 +23,7 @@ ASR_MODEL_SIZE: base
 ASR_MODEL_PATH: null
 ASR_API_URL: null
 ASR_REMOTE_MODEL: null
-ASR_CHUNK_LENGTH: 6
+SUBTITLE_SEGMENT_SECONDS: 8
 DEVICE_PREFERENCE: auto
 COMPUTE_TYPE: auto
 

@@ -196,6 +196,7 @@ Common fields:
 - `LLM_PROVIDER`: `lm_studio`, `ollama`, or `openai_compatible`
 - `LM_STUDIO_MODEL`, `LM_STUDIO_CLI_PATH`, `LM_STUDIO_TTL_SECONDS`
 - `ASR_MODEL_SIZE`, `ASR_MODEL_PATH`, `ASR_API_URL`
+- `SUBTITLE_SEGMENT_SECONDS`: target display duration for subtitles produced by local ASR (default `8`, range `1`–`30`). This controls how 30-second recognition results are split for display; it does not shorten the model's recognition context.
 - `DEVICE_PREFERENCE`: `auto`, `gpu`, or `cpu`
 - `COMPUTE_TYPE`: `auto`, `float16`, or `int8`
 - `TTS_MODE`: `kokoro`, `edge`, or `qwen` in the Settings UI; `speaches` remains a legacy compatibility route

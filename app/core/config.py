@@ -56,7 +56,7 @@ class Settings:
     ASR_MODEL_SIZE: str = "base"
     ASR_MODEL_PATH: Optional[str] = None
     ASR_BEAM_SIZE: int = 5
-    ASR_CHUNK_LENGTH: int = 6  # faster-whisper audio chunk length in seconds
+    SUBTITLE_SEGMENT_SECONDS: int = 8
     ASR_API_URL: Optional[str] = None  # e.g. http://127.0.0.1:8001/asr
     ASR_REMOTE_MODEL: Optional[str] = None  # e.g. Systran/faster-whisper-small
 
@@ -175,7 +175,7 @@ class Settings:
                 elif key in ("LLM_TEMPERATURE", "LLM_TIMEOUT_SECONDS", "DEDUPLICATE_THRESHOLD_SECONDS", "SSE_KEEPALIVE_TIMEOUT", "TTS_SPEED"):
                     value = float(value)
                 elif key in ("LLM_MAX_RETRIES", "LLM_RETRY_BACKOFF_BASE", "TRANSLATION_BATCH_SIZE", "ASR_BEAM_SIZE",
-                             "ASR_CHUNK_LENGTH", "CHUNKING_THRESHOLD_MINUTES", "CHUNK_OVERLAP_SECONDS", "AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS",
+                             "SUBTITLE_SEGMENT_SECONDS", "CHUNKING_THRESHOLD_MINUTES", "CHUNK_OVERLAP_SECONDS", "AUDIO_SAMPLE_RATE", "AUDIO_CHANNELS",
                              "ASS_PLAYRES_X", "ASS_PLAYRES_Y", "ASS_FONT_SIZE_ORIGINAL", "ASS_FONT_SIZE_TRANSLATED", "SSE_QUEUE_MAXSIZE", "DUB_SAMPLE_RATE",
                              "LM_STUDIO_PORT", "LM_STUDIO_TTL_SECONDS"):
                     value = int(value)
@@ -213,7 +213,7 @@ class Settings:
             "ASR_MODEL_SIZE": self.ASR_MODEL_SIZE,
             "ASR_MODEL_PATH": self.ASR_MODEL_PATH,
             "ASR_BEAM_SIZE": self.ASR_BEAM_SIZE,
-            "ASR_CHUNK_LENGTH": self.ASR_CHUNK_LENGTH,
+            "SUBTITLE_SEGMENT_SECONDS": self.SUBTITLE_SEGMENT_SECONDS,
             "ASR_API_URL": self.ASR_API_URL,
             "ASR_REMOTE_MODEL": self.ASR_REMOTE_MODEL,
             # FFmpeg
@@ -330,7 +330,7 @@ class Settings:
             "ASR_MODEL_SIZE": self.ASR_MODEL_SIZE,
             "ASR_MODEL_PATH": self.ASR_MODEL_PATH or "",
             "ASR_BEAM_SIZE": self.ASR_BEAM_SIZE,
-            "ASR_CHUNK_LENGTH": self.ASR_CHUNK_LENGTH,
+            "SUBTITLE_SEGMENT_SECONDS": self.SUBTITLE_SEGMENT_SECONDS,
             "ASR_API_URL": self.ASR_API_URL or "",
             "ASR_REMOTE_MODEL": self.ASR_REMOTE_MODEL or "",
             # FFmpeg

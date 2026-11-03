@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use a fixed 30-second context with word timestamps for local speech recognition, then split recognized output into display subtitles using the configurable subtitle segment duration.
 - Serialize in-process history transactions across managers and atomically replace saved history; preserve unreadable or invalid records instead of silently replacing them with empty history.
 - Recover interrupted rendering pipelines as failed rather than leaving phantom running states after restart; classify TTS/translation model preparation by stage rather than displaying it as transcription.
 

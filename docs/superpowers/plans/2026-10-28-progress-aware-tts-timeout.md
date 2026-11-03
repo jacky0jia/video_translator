@@ -109,4 +109,3 @@ Expected: all Python tests pass (apart from documented skips), all frontend test
 git add docs/superpowers/specs/2026-10-28-progress-aware-tts-timeout.md
 git commit -m "docs: record progress-aware TTS timeout mitigation"
 ```
-
